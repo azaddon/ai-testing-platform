@@ -1,0 +1,35 @@
+server:
+  port: 8080
+  error:
+    include-message: always
+    include-stacktrace: always
+
+spring:
+  application:
+    name: ai-testing-platform
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/ai_testing_platform}
+
+llm:
+  provider: ${LLM_PROVIDER:gemini}   # gemini | openai
+  gemini:
+    api-key: ${GEMINI_API_KEY:}
+    base-url: https://generativelanguage.googleapis.com/v1beta
+    fast-model: gemini-3.5-flash
+    reasoning-model: gemini-3-pro
+    vision-model: gemini-3.5-flash
+  openai:
+    api-key: ${OPENAI_API_KEY:}
+    base-url: https://api.openai.com/v1
+    fast-model: gpt-4.1-mini
+    reasoning-model: gpt-4.1
+
+execution:
+  sandbox:
+    timeout-seconds: 60
+    max-concurrent-runs: 5
+
+logging:
+  level:
+    com.aitestplatform: INFO

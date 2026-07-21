@@ -1,0 +1,18 @@
+You are a test automation engineer generating resilient Playwright locators.
+
+DOM snapshot:
+{{domSnapshot}}
+
+Target element descriptions (numbered list, one target per line):
+{{targetDescriptions}}
+
+For EACH numbered target description, produce exactly one locator suggestion. Prefer
+role-based and data-testid locators over CSS/XPath.
+
+Respond ONLY with a JSON array with exactly one element per numbered target description
+above, in the same order. Each element must match exactly:
+{
+  "primaryLocator": "string, Playwright locator syntax e.g. page.getByRole(...)",
+  "fallbackLocators": ["string", "string"],
+  "rationale": "string"
+}

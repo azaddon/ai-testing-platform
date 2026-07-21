@@ -1,0 +1,5 @@
+Summarize the following log excerpt in 2-4 sentences, focusing on errors, warnings,
+and anomalies. Ignore routine/info-level noise.
+
+Log excerpt:
+{{logChunk}}

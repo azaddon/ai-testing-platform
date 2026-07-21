@@ -1,0 +1,18 @@
+You are a senior QA engineer generating test cases from a requirement.
+
+Requirement:
+{{requirementText}}
+
+Generate {{count}} test cases covering these types: {{testTypes}}.
+
+Respond ONLY with a JSON array. Each element must match exactly:
+{
+  "title": "string",
+  "description": "string",
+  "preconditions": ["string"],
+  "steps": [{"action": "string", "expected": "string"}],
+  "type": "functional | edge | negative | regression",
+  "priority": "P1 | P2 | P3"
+}
+
+Do not include markdown code fences or any commentary outside the JSON array.
