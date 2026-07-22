@@ -5,12 +5,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
+import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Default LlmProvider implementation, backed by the Gemini API.
@@ -157,6 +165,7 @@ public class GeminiProvider implements LlmProvider {
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(String.class)
+                    .retryWhen(retrySpec())
                     .block();
 
             String text = extractText(raw);
@@ -184,6 +193,7 @@ public class GeminiProvider implements LlmProvider {
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(String.class)
+                    .retryWhen(retrySpec())
                     .block();
 
             String text = extractText(raw);
@@ -193,6 +203,67 @@ public class GeminiProvider implements LlmProvider {
             logCall(model, feature, start, false, e.getMessage());
             throw new LlmCallException("Gemini call failed for feature " + feature, e);
         }
+    }
+
+    private static final Set<Integer> RETRYABLE_STATUS_CODES = Set.of(429, 500, 502, 503, 504);
+    private static final int MAX_RETRIES = 3;
+    private static final Duration BASE_BACKOFF = Duration.ofMillis(500);
+    private static final Duration MAX_BACKOFF = Duration.ofSeconds(5);
+    private static final Duration MAX_RETRY_AFTER = Duration.ofSeconds(10);
+
+    /**
+     * Retries transient upstream failures (rate limiting, momentary outages) before giving
+     * up. When Gemini sends a Retry-After header (common on 429s), that's honored instead of
+     * the fixed exponential schedule — a real rate-limit window is usually longer than
+     * 500ms-5s, so ignoring the header just burns through retries without ever waiting long
+     * enough to succeed. Retry-After is still capped (MAX_RETRY_AFTER) so one request can't
+     * block past nginx's proxy timeout. Non-retryable errors (4xx other than 429, parse
+     * failures, etc.) pass straight through untouched.
+     */
+    private Retry retrySpec() {
+        return Retry.from(signals -> signals.flatMap(signal -> {
+            Throwable failure = signal.failure();
+            if (signal.totalRetries() >= MAX_RETRIES || !isRetryable(failure)) {
+                return Mono.error(failure);
+            }
+            return Mono.delay(nextDelay(failure, signal.totalRetries()));
+        }));
+    }
+
+    private Duration nextDelay(Throwable failure, long attempt) {
+        if (failure instanceof WebClientResponseException wcre) {
+            Duration retryAfter = parseRetryAfter(wcre);
+            if (retryAfter != null) {
+                return retryAfter.compareTo(MAX_RETRY_AFTER) > 0 ? MAX_RETRY_AFTER : retryAfter;
+            }
+        }
+        Duration backoff = BASE_BACKOFF.multipliedBy((long) Math.pow(2, attempt));
+        return backoff.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : backoff;
+    }
+
+    private Duration parseRetryAfter(WebClientResponseException wcre) {
+        String header = wcre.getHeaders().getFirst(HttpHeaders.RETRY_AFTER);
+        if (header == null || header.isBlank()) {
+            return null;
+        }
+        try {
+            return Duration.ofSeconds(Math.max(0, Long.parseLong(header.trim())));
+        } catch (NumberFormatException notASecondsValue) {
+            try {
+                ZonedDateTime target = ZonedDateTime.parse(header, DateTimeFormatter.RFC_1123_DATE_TIME);
+                long seconds = Duration.between(ZonedDateTime.now(target.getZone()), target).getSeconds();
+                return Duration.ofSeconds(Math.max(0, seconds));
+            } catch (Exception notADateEither) {
+                return null;
+            }
+        }
+    }
+
+    private boolean isRetryable(Throwable throwable) {
+        if (throwable instanceof WebClientResponseException wcre) {
+            return RETRYABLE_STATUS_CODES.contains(wcre.getStatusCode().value());
+        }
+        return false;
     }
 
     private String extractText(String rawResponseJson) throws Exception {
