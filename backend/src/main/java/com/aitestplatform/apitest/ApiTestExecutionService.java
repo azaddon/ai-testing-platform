@@ -43,6 +43,8 @@ public class ApiTestExecutionService {
 
         long start = System.currentTimeMillis();
         try {
+            //first validate generated code.
+            GeneratedCodeValidator.validateGeneratedCode(script.getGeneratedCode());
             Response response = compileAndRun(script.getGeneratedCode(), baseUri);
             long latency = System.currentTimeMillis() - start;
             boolean passed = response.getStatusCode() < 400;
@@ -92,7 +94,7 @@ public class ApiTestExecutionService {
                     options, null, units).call();
             if (!ok) {
                 throw new IllegalStateException("Generated Rest Assured code failed to compile");
-            }
+            }  
         }
 
         try (URLClassLoader classLoader = new URLClassLoader(
