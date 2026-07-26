@@ -7,7 +7,7 @@ import com.aitestplatform.llm.dto.LlmDtos.GeneratedApiTest;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.stream.Collectors;
+//import java.util.stream.Collectors;
 
 @Service
 public class ApiTestGenerationService {
@@ -31,9 +31,9 @@ public class ApiTestGenerationService {
 
         List<ApiTestScript> toSave = generated.tests().stream()
                 .map(test -> {
-                    var entity = this.toEntity(test);
-                    entity.setProjectId(projectId);
-                    return entity;
+                    ApiTestScript script = toEntity(test);
+                    script.setProjectId(projectId);
+                    return script;
                 }).toList();
 
         return repository.saveAll(toSave);
