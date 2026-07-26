@@ -83,8 +83,13 @@ public class ApiTestExecutionService {
 
         try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
             Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjects(sourceFile.toFile());
+
+            // Improvement: Passing current JVM classpath to compiler to avoid dependency issues
+            String currentClasspath = System.getProperty("java.class.path");
+            List<String> options = List.of("-d", tempDir.toString(), "-classpath", currentClasspath);
+
             boolean ok = compiler.getTask(null, fileManager, null,
-                    List.of("-d", tempDir.toString()), null, units).call();
+                    options, null, units).call();
             if (!ok) {
                 throw new IllegalStateException("Generated Rest Assured code failed to compile");
             }
