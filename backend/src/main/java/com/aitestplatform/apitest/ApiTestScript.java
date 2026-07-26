@@ -15,7 +15,7 @@ public class ApiTestScript {
     private String method;
     private String scenario;
     private String generatedCode;
-    private String status = "generated"; // generated | running | passed | failed
+    private ScriptStatus status; // generated | running | passed | failed
     private LastRunResult lastRunResult;
     private Instant createdAt = Instant.now();
 
@@ -35,8 +35,8 @@ public class ApiTestScript {
     public void setScenario(String scenario) { this.scenario = scenario; }
     public String getGeneratedCode() { return generatedCode; }
     public void setGeneratedCode(String generatedCode) { this.generatedCode = generatedCode; }
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
+    public ScriptStatus getStatus() { return status; }
+    public void setStatus(ScriptStatus status) { this.status = status; }
     public LastRunResult getLastRunResult() { return lastRunResult; }
     public void setLastRunResult(LastRunResult lastRunResult) { this.lastRunResult = lastRunResult; }
     public Instant getCreatedAt() { return createdAt; }

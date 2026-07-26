@@ -1,6 +1,9 @@
 package com.aitestplatform.apitest;
 
 import com.aitestplatform.apitest.dto.ApiTestDtos.GenerateRequest;
+
+import jakarta.validation.Valid;
+
 import com.aitestplatform.apitest.dto.ApiTestDtos.ExecuteRequest;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,7 +23,7 @@ public class ApiTestController {
     }
 
     @PostMapping("/projects/{projectId}/api-tests/generate")
-    public List<ApiTestScript> generate(@PathVariable String projectId, @RequestBody GenerateRequest request) {
+    public List<ApiTestScript> generate(@PathVariable String projectId, @Valid @RequestBody GenerateRequest request) {
         return generationService.generate(projectId, request);
     }
 
