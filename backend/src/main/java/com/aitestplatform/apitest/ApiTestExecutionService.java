@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Compiles generated Rest Assured Java source on the fly and runs it in a short-lived
@@ -108,6 +109,11 @@ public class ApiTestExecutionService {
                 return future.get(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
             } finally {
                 executor.shutdownNow();
+                try {
+                    executor.awaitTermination(2, TimeUnit.SECONDS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
                 deleteRecursively(tempDir.toFile());
             }
         }
