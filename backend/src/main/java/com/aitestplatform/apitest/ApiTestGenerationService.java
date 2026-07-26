@@ -30,9 +30,11 @@ public class ApiTestGenerationService {
         var generated = llmProvider.generateApiTests(llmRequest);
 
         List<ApiTestScript> toSave = generated.tests().stream()
-                .map(this::toEntity)
-                .peek(script -> script.setProjectId(projectId))
-                .collect(Collectors.toList());
+                .map(test -> {
+                    var entity = this.toEntity(test);
+                    entity.setProjectId(projectId);
+                    return entity;
+                }).toList();
 
         return repository.saveAll(toSave);
     }
@@ -47,7 +49,7 @@ public class ApiTestGenerationService {
         script.setMethod(gt.method());
         script.setScenario(gt.scenario());
         script.setGeneratedCode(gt.generatedCode());
-        script.setStatus("generated");
+        script.setStatus(ScriptStatus.GENERATED);
         return script;
     }
 }

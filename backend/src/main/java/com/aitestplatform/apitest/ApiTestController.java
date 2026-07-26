@@ -1,10 +1,11 @@
 package com.aitestplatform.apitest;
 
 import com.aitestplatform.apitest.dto.ApiTestDtos.GenerateRequest;
+import com.aitestplatform.apitest.dto.ApiTestDtos.ExecuteRequest;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Map;
+//import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -29,7 +30,7 @@ public class ApiTestController {
     }
 
     @PostMapping("/api-tests/{scriptId}/execute")
-    public ApiTestScript execute(@PathVariable String scriptId, @RequestBody Map<String, String> body) {
-        return executionService.execute(scriptId, body.getOrDefault("baseUri", ""));
+    public ApiTestScript execute(@PathVariable String scriptId, @RequestBody ExecuteRequest body) {
+        return executionService.execute(scriptId, body.baseURI());
     }
 }

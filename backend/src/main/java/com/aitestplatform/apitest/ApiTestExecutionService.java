@@ -38,7 +38,7 @@ public class ApiTestExecutionService {
         ApiTestScript script = repository.findById(scriptId)
                 .orElseThrow(() -> new IllegalArgumentException("API test script not found: " + scriptId));
 
-        script.setStatus("running");
+        script.setStatus(ScriptStatus.RUNNING);
         repository.save(script);
 
         long start = System.currentTimeMillis();
@@ -49,11 +49,11 @@ public class ApiTestExecutionService {
 
             script.setLastRunResult(new ApiTestScript.LastRunResult(
                     response.getStatusCode(), latency, passed, response.getBody().asPrettyString()));
-            script.setStatus(passed ? "passed" : "failed");
+            script.setStatus(passed ? ScriptStatus.PASSED : ScriptStatus.FAILED);
         } catch (Exception e) {
             long latency = System.currentTimeMillis() - start;
             script.setLastRunResult(new ApiTestScript.LastRunResult(-1, latency, false, "Execution error: " + e.getMessage()));
-            script.setStatus("failed");
+            script.setStatus(ScriptStatus.FAILED);
         }
         return repository.save(script);
     }
