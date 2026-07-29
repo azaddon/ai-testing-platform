@@ -17,7 +17,7 @@ export default function TestCaseGenerator({ projectId }: { projectId: string }) 
   const [requirementText, setRequirementText] = useState("");
   const [count, setCount] = useState(5);
   const [testTypes, setTestTypes] = useState<string[]>(["functional", "edge", "negative"]);
-  const [targetUrl, setTargetUrl] = useState("http://localhost:5173");
+  const [targetUrl, setTargetUrl] = useState("http://host.docker.internal:5173");
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingExisting, setLoadingExisting] = useState(true);

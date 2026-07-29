@@ -201,7 +201,14 @@ public class GeminiProvider implements LlmProvider {
 
     private String extractText(String rawResponseJson) throws Exception {
         JsonNode root = objectMapper.readTree(rawResponseJson);
-        return root.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
+        JsonNode parts = root.path("candidates").get(0).path("content").path("parts");
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode part : parts) {
+            if (part.has("text")) {
+                sb.append(part.get("text").asText());
+            }
+        }
+        return sb.toString().trim();
     }
 
     private void logCall(String model, String feature, long start, boolean success, String error) {
