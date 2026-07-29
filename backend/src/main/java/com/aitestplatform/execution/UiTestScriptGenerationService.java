@@ -7,14 +7,20 @@ import com.aitestplatform.testcase.TestCase;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * Bridges an AI-generated, natural-language TestCase into an executable UiTestScript.
  * This is the piece referenced but left unbuilt in the original UiTestScript scaffolding:
- * every step's target element is resolved via a single batched LlmProvider.generateLocators()
- * call (one LLM round-trip per test case, not one per step), then the results are assembled
- * into a Playwright method body that PlaywrightExecutionService can compile and run.
+ * each step's target element is resolved via its own LlmProvider.generateLocators() call
+ * (one LLM round-trip per step), then the results are assembled into a Playwright method
+ * body that PlaywrightExecutionService can compile and run.
+ *
+ * One call per step, not one batched call for the whole test case: LocatorGenRequest /
+ * the underlying prompt are designed around resolving ONE target element per call (they
+ * return several *candidate* locators for that one element, most-robust-first) — there's
+ * no batch variant that takes N descriptions and returns N per-step suggestions. Doing
+ * this per-step costs more LLM calls per test case, but each call is small, and it avoids
+ * misreading "alternative locators for one element" as "one locator per step".
  *
  * No live DOM snapshot is captured here (that would require driving a browser before the
  * run itself starts), so locator suggestions are based on the step text alone. This is a
@@ -36,21 +42,24 @@ public class UiTestScriptGenerationService {
 
         StringBuilder code = new StringBuilder();
 
-        if (!steps.isEmpty()) {
-            List<String> targetDescriptions = steps.stream()
-                    .map(s -> s.action() + " (expected result: " + s.expected() + ")")
-                    .collect(Collectors.toList());
+        for (int i = 0; i < steps.size(); i++) {
+            TestCase.Step step = steps.get(i);
+            String targetDescription = step.action() + " (expected result: " + step.expected() + ")";
 
             List<LocatorSuggestion> suggestions = llmProvider.generateLocators(
-                    new LocatorGenRequest("", targetDescriptions));
+                    new LocatorGenRequest("", targetDescription));
 
-            for (int i = 0; i < steps.size(); i++) {
-                TestCase.Step step = steps.get(i);
-                LocatorSuggestion suggestion = suggestions.get(i);
-
-                code.append("// Step ").append(i + 1).append(": ").append(step.action()).append("\n");
-                code.append(buildStepStatement(suggestion, step)).append("\n\n");
+            if (suggestions.isEmpty()) {
+                code.append("// Step ").append(i + 1).append(": ").append(step.action())
+                        .append(" — no locator suggestion returned, needs manual authoring\n\n");
+                continue;
             }
+
+            // Candidates come back most-robust-first; take the top one for this step.
+            LocatorSuggestion suggestion = suggestions.get(0);
+
+            code.append("// Step ").append(i + 1).append(": ").append(step.action()).append("\n");
+            code.append(buildStepStatement(suggestion, step)).append("\n\n");
         }
 
         UiTestScript script = new UiTestScript();

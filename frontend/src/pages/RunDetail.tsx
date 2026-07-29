@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { api, openTestRunSocket } from "../api/client";
 
 interface StepResult {
@@ -26,11 +26,8 @@ interface FailureAnalysis {
 
 export default function RunDetail() {
   const { runId } = useParams<{ runId: string }>();
-  const navigate = useNavigate();
   const [run, setRun] = useState<TestRun | null>(null);
   const [analysis, setAnalysis] = useState<FailureAnalysis | null>(null);
-  const [rerunning, setRerunning] = useState(false);
-  const [rerunError, setRerunError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!runId) return;
@@ -49,22 +46,6 @@ export default function RunDetail() {
     }
   }, [run?.status, runId]);
 
-  const failedCount = run?.results?.filter((r) => r.status === "failed").length ?? 0;
-
-  async function handleRerunFailed() {
-    if (!runId) return;
-    setRerunning(true);
-    setRerunError(null);
-    try {
-      const newRun = (await api.rerunFailedTests(runId)) as { id: string };
-      navigate(`/test-runs/${newRun.id}`);
-    } catch (e: any) {
-      setRerunError(e.message);
-    } finally {
-      setRerunning(false);
-    }
-  }
-
   if (!run) return <p>Loading run...</p>;
 
   return (
@@ -73,15 +54,6 @@ export default function RunDetail() {
       <p>
         Type: {run.type} · Status: <strong>{run.status}</strong>
       </p>
-
-      {failedCount > 0 && run.status !== "running" && run.status !== "queued" && (
-        <div style={{ marginBottom: 16 }}>
-          <button onClick={handleRerunFailed} disabled={rerunning}>
-            {rerunning ? "Starting rerun..." : `Rerun ${failedCount} failed test case${failedCount > 1 ? "s" : ""}`}
-          </button>
-          {rerunError && <p style={{ color: "crimson" }}>{rerunError}</p>}
-        </div>
-      )}
 
       <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 24 }}>
         <thead>

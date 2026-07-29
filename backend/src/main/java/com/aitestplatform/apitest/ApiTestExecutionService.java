@@ -1,5 +1,7 @@
 package com.aitestplatform.apitest;
 
+import com.aitestplatform.common.ApiTestWorkflowException.CodeNotGeneratedException;
+import com.aitestplatform.common.ApiTestWorkflowException.ScenarioNotFoundException;
 import io.restassured.response.Response;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -12,7 +14,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Compiles generated Rest Assured Java source on the fly and runs it in a short-lived
@@ -37,15 +38,22 @@ public class ApiTestExecutionService {
 
     public ApiTestScript execute(String scriptId, String baseUri) {
         ApiTestScript script = repository.findById(scriptId)
-                .orElseThrow(() -> new IllegalArgumentException("API test script not found: " + scriptId));
+                .orElseThrow(() -> new ScenarioNotFoundException(scriptId));
+
+        if (script.getGeneratedCode() == null || script.getGeneratedCode().isBlank()) {
+            throw new CodeNotGeneratedException(scriptId);
+        }
+
+        // Defense-in-depth: re-validate even though generateCode() already checked this,
+        // in case a script's code was ever written some other way (direct DB edit, a future
+        // "edit code" feature, etc).
+        GeneratedCodeValidator.validateGeneratedCode(scriptId, script.getGeneratedCode());
 
         script.setStatus(ScriptStatus.RUNNING);
         repository.save(script);
 
         long start = System.currentTimeMillis();
         try {
-            //first validate generated code.
-            GeneratedCodeValidator.validateGeneratedCode(script.getGeneratedCode());
             Response response = compileAndRun(script.getGeneratedCode(), baseUri);
             long latency = System.currentTimeMillis() - start;
             boolean passed = response.getStatusCode() < 400;
@@ -61,6 +69,18 @@ public class ApiTestExecutionService {
         return repository.save(script);
     }
 
+    /**
+     * Runs every script in a project that currently has generated code; scripts still at
+     * SCENARIO_GENERATED (no code yet) are skipped rather than failing the whole batch,
+     * since a partially-authored suite is a normal state, not an error.
+     */
+    public List<ApiTestScript> executeAllRunnable(String projectId, String baseUri) {
+        return repository.findByProjectId(projectId).stream()
+                .filter(s -> s.getGeneratedCode() != null && !s.getGeneratedCode().isBlank())
+                .map(s -> execute(s.getId(), baseUri))
+                .toList();
+    }
+
     private Response compileAndRun(String generatedMethodBody, String baseUri) throws Exception {
         String className = "GeneratedApiTest_" + UUID.randomUUID().toString().replace("-", "");
         String source = """
@@ -74,7 +94,7 @@ public class ApiTestExecutionService {
                     }
                 }
                 """.formatted(className, generatedMethodBody);
-
+        System.out.println("Classpath = " + System.getProperty("java.class.path"));
         Path tempDir = Files.createTempDirectory("api-test-exec");
         Path sourceFile = tempDir.resolve(className + ".java");
         Files.writeString(sourceFile, source);
@@ -86,16 +106,11 @@ public class ApiTestExecutionService {
 
         try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
             Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjects(sourceFile.toFile());
-
-            // Improvement: Passing current JVM classpath to compiler to avoid dependency issues
-            String currentClasspath = System.getProperty("java.class.path");
-            List<String> options = List.of("-d", tempDir.toString(), "-classpath", currentClasspath);
-
             boolean ok = compiler.getTask(null, fileManager, null,
-                    options, null, units).call();
+                    List.of("-d", tempDir.toString()), null, units).call();
             if (!ok) {
                 throw new IllegalStateException("Generated Rest Assured code failed to compile");
-            }  
+            }
         }
 
         try (URLClassLoader classLoader = new URLClassLoader(
@@ -109,11 +124,6 @@ public class ApiTestExecutionService {
                 return future.get(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
             } finally {
                 executor.shutdownNow();
-                try {
-                    executor.awaitTermination(2, TimeUnit.SECONDS);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                }
                 deleteRecursively(tempDir.toFile());
             }
         }

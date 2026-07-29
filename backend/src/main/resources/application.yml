@@ -17,7 +17,7 @@ llm:
     api-key: ${GEMINI_API_KEY:}
     base-url: https://generativelanguage.googleapis.com/v1beta
     fast-model: gemini-3.5-flash
-    reasoning-model: gemini-3-pro
+    reasoning-model: gemini-3.5-flash
     vision-model: gemini-3.5-flash
   openai:
     api-key: ${OPENAI_API_KEY:}

@@ -1,0 +1,19 @@
+You are a senior SDET identifying API test scenarios (NOT code yet) from an OpenAPI spec.
+
+OpenAPI spec (relevant excerpt):
+{{openApiSpec}}
+
+Generate at most {{count}} scenarios TOTAL across all endpoints (not per endpoint). Prioritize
+covering distinct endpoints first, then within remaining budget cover: happy path,
+missing/invalid required fields, boundary values, and authentication/authorization failures
+where applicable. If {{count}} is too small to cover every endpoint, prefer breadth (one
+scenario per endpoint) over depth (many scenarios for one endpoint).
+
+Respond ONLY with a JSON array of at most {{count}} elements. Each element must match exactly:
+{
+  "endpoint": "string",
+  "method": "GET|POST|PUT|DELETE|PATCH",
+  "scenario": "a short description of the scenario, e.g. 'missing required field: email'"
+}
+
+Do not include markdown code fences, code, or any commentary outside the JSON array.

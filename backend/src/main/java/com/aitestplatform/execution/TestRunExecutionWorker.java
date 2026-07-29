@@ -3,6 +3,8 @@ package com.aitestplatform.execution;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import com.aitestplatform.apitest.ScriptStatus;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -36,13 +38,13 @@ public class TestRunExecutionWorker {
     @Async
     public void execute(String runId, List<String> uiTestScriptIds) {
         TestRun run = testRunRepository.findById(runId).orElseThrow();
-        run.setStatus("running");
+        run.setStatus(ScriptStatus.RUNNING.toString());
         testRunRepository.save(run);
         webSocketHandler.broadcast(runId, run);
 
         List<TestRun.StepResult> results = new ArrayList<>();
         boolean anyFailed = false;
-
+        try{
         for (String scriptId : uiTestScriptIds) {
             UiTestScript script = uiTestScriptRepository.findById(scriptId).orElse(null);
             if (script == null) continue;
@@ -51,18 +53,36 @@ public class TestRunExecutionWorker {
             var result = playwrightExecutionService.run(script);
             long duration = System.currentTimeMillis() - start;
 
-            String status = result.passed() ? "passed" : "failed";
+            String status = result.passed() ? ScriptStatus.PASSED.toString() : ScriptStatus.FAILED.toString();
             anyFailed = anyFailed || !result.passed();
             results.add(new TestRun.StepResult(script.getTestCaseId(), status, duration, result.errorMessage()));
 
             run.setResults(new ArrayList<>(results));
+            testRunRepository.save(run);
             webSocketHandler.broadcast(runId, run);
         }
 
-        run.setStatus(anyFailed ? "failed" : "passed");
-        run.setFinishedAt(java.time.Instant.now());
+            run.setStatus(anyFailed ? ScriptStatus.FAILED.toString() : ScriptStatus.PASSED.toString());
+        }
+        catch (Exception e) {
+        e.printStackTrace();
+
+        run.setStatus(ScriptStatus.FAILED.toString());
+
+        results.add(new TestRun.StepResult(
+                "SYSTEM",
+                ScriptStatus.FAILED.toString(),
+                0,
+                e.getMessage()));
+
         run.setResults(results);
-        testRunRepository.save(run);
-        webSocketHandler.broadcast(runId, run);
+    }
+
+        finally{
+            run.setFinishedAt(java.time.Instant.now());
+            testRunRepository.save(run);
+            webSocketHandler.broadcast(runId, run);
+        }
+        
     }
 }

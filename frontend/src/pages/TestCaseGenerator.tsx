@@ -17,16 +17,21 @@ export default function TestCaseGenerator({ projectId }: { projectId: string }) 
   const [requirementText, setRequirementText] = useState("");
   const [count, setCount] = useState(5);
   const [testTypes, setTestTypes] = useState<string[]>(["functional", "edge", "negative"]);
+  const [targetUrl, setTargetUrl] = useState("http://localhost:5173");
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingExisting, setLoadingExisting] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [targetUrl, setTargetUrl] = useState("http://localhost:3000");
-  const [runningId, setRunningId] = useState<string | null>(null);
+  // per-row transient state for the Run action
+  const [rowBusy, setRowBusy] = useState<Record<string, boolean>>({});
+  const [rowError, setRowError] = useState<Record<string, string | null>>({});
 
-  // Reload previously generated/approved test cases so they survive a page refresh
-  // instead of only ever showing the most recent "Generate" batch.
+  // Load previously generated test cases for this project on mount (and whenever the
+  // project changes) — without this, a refresh shows an empty list even though
+  // everything is still in Mongo, since generate() only ever set local state.
   useEffect(() => {
     let cancelled = false;
+    setLoadingExisting(true);
     api
       .listTestCases(projectId)
       .then((existing) => {
@@ -34,6 +39,9 @@ export default function TestCaseGenerator({ projectId }: { projectId: string }) 
       })
       .catch((e: any) => {
         if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingExisting(false);
       });
     return () => {
       cancelled = true;
@@ -45,7 +53,9 @@ export default function TestCaseGenerator({ projectId }: { projectId: string }) 
     setError(null);
     try {
       const generated = (await api.generateTestCases(projectId, { requirementText, testTypes, count })) as TestCase[];
-      setTestCases((prev) => [...generated, ...prev]);
+      // Append to whatever's already loaded rather than replacing it, so a second
+      // "Generate" call builds up the suite instead of hiding earlier results.
+      setTestCases((prev) => [...prev, ...generated]);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -58,16 +68,18 @@ export default function TestCaseGenerator({ projectId }: { projectId: string }) 
     setTestCases((prev) => prev.map((tc) => (tc.id === id ? { ...tc, status: "approved" } : tc)));
   }
 
-  async function handleRun(id: string) {
-    setRunningId(id);
-    setError(null);
+  async function handleRun(testCaseId: string) {
+    setRowBusy((prev) => ({ ...prev, [testCaseId]: true }));
+    setRowError((prev) => ({ ...prev, [testCaseId]: null }));
     try {
-      const run = (await api.runTestCase(projectId, id, targetUrl)) as { id: string };
+      const run = (await api.runTestCase(projectId, testCaseId, targetUrl)) as { id: string };
+      // The run starts async on the backend (queued -> running -> passed/failed); jump to
+      // its detail page, which already polls/subscribes over the WebSocket for live status.
       navigate(`/test-runs/${run.id}`);
     } catch (e: any) {
-      setError(e.message);
+      setRowError((prev) => ({ ...prev, [testCaseId]: e.message }));
     } finally {
-      setRunningId(null);
+      setRowBusy((prev) => ({ ...prev, [testCaseId]: false }));
     }
   }
 
@@ -83,7 +95,7 @@ export default function TestCaseGenerator({ projectId }: { projectId: string }) 
         style={{ width: "100%", padding: 8, marginBottom: 12 }}
       />
 
-      <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
         <label>
           Count:{" "}
           <input type="number" value={count} min={1} max={20} onChange={(e) => setCount(Number(e.target.value))} />
@@ -107,41 +119,62 @@ export default function TestCaseGenerator({ projectId }: { projectId: string }) 
         </button>
       </div>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
+      <div style={{ marginBottom: 16 }}>
         <label>
-          Target URL to run against:{" "}
-          <input value={targetUrl} onChange={(e) => setTargetUrl(e.target.value)} style={{ width: 260 }} />
+          Target URL (for Run):{" "}
+          <input
+            value={targetUrl}
+            onChange={(e) => setTargetUrl(e.target.value)}
+            style={{ width: 260 }}
+            placeholder="http://localhost:5173"
+          />
         </label>
       </div>
 
       {error && <p style={{ color: "crimson" }}>{error}</p>}
+      {loadingExisting && <p style={{ color: "#888" }}>Loading existing test cases...</p>}
 
-      {testCases.map((tc) => (
-        <div key={tc.id} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16, marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <strong>{tc.title}</strong>
-            <span style={{ fontSize: 12, color: "#888" }}>
-              {tc.type} · {tc.priority} · {tc.status}
-            </span>
-          </div>
-          <p style={{ color: "#444" }}>{tc.description}</p>
-          <ol>
-            {tc.steps?.map((s, i) => (
-              <li key={i}>
-                {s.action} → <em>{s.expected}</em>
-              </li>
-            ))}
-          </ol>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            {tc.status !== "approved" && <button onClick={() => handleApprove(tc.id)}>Approve</button>}
-            {tc.status === "approved" && (
-              <button onClick={() => handleRun(tc.id)} disabled={runningId === tc.id}>
-                {runningId === tc.id ? "Starting run..." : "Run"}
+      {testCases.map((tc) => {
+        const busy = !!rowBusy[tc.id];
+        const runError = rowError[tc.id];
+        const approved = tc.status === "approved";
+
+        return (
+          <div key={tc.id} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16, marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <strong>{tc.title}</strong>
+              <span style={{ fontSize: 12, color: "#888" }}>
+                {tc.type} · {tc.priority} · {tc.status}
+              </span>
+            </div>
+            <p style={{ color: "#444" }}>{tc.description}</p>
+            <ol>
+              {tc.steps?.map((s, i) => (
+                <li key={i}>
+                  {s.action} → <em>{s.expected}</em>
+                </li>
+              ))}
+            </ol>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              {!approved && <button onClick={() => handleApprove(tc.id)}>Approve</button>}
+              <button
+                onClick={() => handleRun(tc.id)}
+                disabled={!approved || busy}
+                title={approved ? undefined : "Approve this test case first"}
+              >
+                {busy ? "Starting run..." : "Run"}
               </button>
-            )}
+            </div>
+
+            {runError && <p style={{ color: "crimson", fontSize: 13, marginTop: 8 }}>{runError}</p>}
           </div>
-        </div>
-      ))}
+        );
+      })}
+
+      {!loadingExisting && testCases.length === 0 && (
+        <p style={{ color: "#888" }}>No test cases yet — generate some above.</p>
+      )}
     </div>
   );
 }

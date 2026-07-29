@@ -15,7 +15,11 @@ public interface LlmProvider {
 
     GeneratedTestCases generateTestCases(TestCaseGenRequest request);
 
-    GeneratedApiTests generateApiTests(ApiTestGenRequest request);
+    /** Step 1 of API test authoring: scenarios only, no Rest Assured code yet. */
+    GeneratedApiTestScenarios generateApiTestScenarios(ApiTestGenRequest request);
+
+    /** Step 2: generate Rest Assured code for exactly one previously-generated scenario. */
+    GeneratedApiTestCode generateApiTestCode(ApiTestCodeGenRequest request);
 
     List<LocatorSuggestion> generateLocators(LocatorGenRequest request);
 

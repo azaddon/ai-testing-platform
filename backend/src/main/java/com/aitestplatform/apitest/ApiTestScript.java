@@ -14,8 +14,14 @@ public class ApiTestScript {
     private String endpoint;
     private String method;
     private String scenario;
-    private String generatedCode;
-    private ScriptStatus status; // generated | running | passed | failed
+
+    /** Spec context captured at scenario-generation time, reused for accurate code generation. */
+    private String openApiSpecContext;
+
+    private String generatedCode; // null until "Generate Code" succeeds
+
+    private ScriptStatus status = ScriptStatus.SCENARIO_GENERATED;
+
     private LastRunResult lastRunResult;
     private Instant createdAt = Instant.now();
 
@@ -33,6 +39,8 @@ public class ApiTestScript {
     public void setMethod(String method) { this.method = method; }
     public String getScenario() { return scenario; }
     public void setScenario(String scenario) { this.scenario = scenario; }
+    public String getOpenApiSpecContext() { return openApiSpecContext; }
+    public void setOpenApiSpecContext(String openApiSpecContext) { this.openApiSpecContext = openApiSpecContext; }
     public String getGeneratedCode() { return generatedCode; }
     public void setGeneratedCode(String generatedCode) { this.generatedCode = generatedCode; }
     public ScriptStatus getStatus() { return status; }

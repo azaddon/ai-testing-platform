@@ -28,24 +28,27 @@ public class LlmDtos {
     public record ApiTestGenRequest(
             String projectId,
             String openApiSpec,    // raw spec content (yaml/json)
-            List<String> endpointFilters
+            List<String> endpointFilters,
+            int count               // upper bound on total scenarios generated
     ) {}
 
-    public record GeneratedApiTest(
+    /** Scenario only — no code yet. This is the output of the "Generate Scenario" step. */
+    public record ApiScenario(String endpoint, String method, String scenario) {}
+
+    public record GeneratedApiTestScenarios(List<ApiScenario> scenarios, String modelUsed) {}
+
+    /** Input for the "Generate Code" step — one scenario at a time, plus enough spec
+     *  context for the LLM to produce accurate Rest Assured code for that endpoint. */
+    public record ApiTestCodeGenRequest(
             String endpoint,
             String method,
-            String scenario,       // happy-path, missing-field, boundary, auth-failure
-            String generatedCode   // full Rest Assured Java method body
+            String scenario,
+            String openApiSpecContext
     ) {}
 
-    public record GeneratedApiTests(List<GeneratedApiTest> tests, String modelUsed) {}
+    public record GeneratedApiTestCode(String generatedCode, String modelUsed) {}
 
-    /**
-     * targetDescriptions is a batch: one description per element the caller needs a locator
-     * for. The response is one LocatorSuggestion per element, in the same order — this lets
-     * a whole test case's steps be resolved in a single LLM call instead of one call per step.
-     */
-    public record LocatorGenRequest(String domSnapshot, List<String> targetDescriptions) {}
+    public record LocatorGenRequest(String domSnapshot, String targetDescription) {}
 
     public record LocatorSuggestion(String primaryLocator, List<String> fallbackLocators, String rationale) {}
 

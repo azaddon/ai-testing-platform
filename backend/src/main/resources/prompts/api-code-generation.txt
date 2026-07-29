@@ -1,0 +1,17 @@
+You are a senior SDET writing Rest Assured Java code for exactly ONE test scenario.
+
+Endpoint: {{method}} {{endpoint}}
+Scenario: {{scenario}}
+
+Relevant OpenAPI spec context:
+{{openApiSpecContext}}
+
+Respond ONLY with JSON matching exactly:
+{
+  "generatedCode": "a complete Java method body using Rest Assured given().when().then(), as a single string with \\n for newlines"
+}
+
+The method body you write will be inserted verbatim into:
+  public static Response run(String baseUri) throws Exception { <your code here> }
+It must end by returning an io.restassured.response.Response. Do not include markdown
+code fences or any commentary outside the JSON object.
