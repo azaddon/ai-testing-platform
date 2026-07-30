@@ -3,9 +3,9 @@ package com.aitestplatform.common;
 import org.springframework.http.HttpStatus;
 
 /**
- * Base type for the API Test Generator's scenario -> code -> run state-machine errors.
- * Each subtype carries the HTTP status GlobalExceptionHandler should respond with, so the
- * frontend gets a clean JSON error instead of a stack trace.
+ * Base type for the API Test Generator's scenario -> execution-model -> run state-machine
+ * errors. Each subtype carries the HTTP status GlobalExceptionHandler should respond with,
+ * so the frontend gets a clean JSON error instead of a stack trace.
  */
 public class ApiTestWorkflowException extends RuntimeException {
 
@@ -27,26 +27,27 @@ public class ApiTestWorkflowException extends RuntimeException {
         }
     }
 
-    /** Code was already generated for this scenario; refuse to silently overwrite it. */
-    public static class CodeAlreadyGeneratedException extends ApiTestWorkflowException {
-        public CodeAlreadyGeneratedException(String scriptId) {
-            super("Code has already been generated for scenario '" + scriptId + "'. "
-                    + "Generate a new scenario if you want different code.", HttpStatus.CONFLICT);
+    /** An execution model was already generated for this scenario; refuse to silently overwrite it. */
+    public static class ExecutionModelAlreadyGeneratedException extends ApiTestWorkflowException {
+        public ExecutionModelAlreadyGeneratedException(String scriptId) {
+            super("An execution model has already been generated for scenario '" + scriptId + "'. "
+                    + "Generate a new scenario if you want a different one.", HttpStatus.CONFLICT);
         }
     }
 
-    /** Run was requested but no code exists yet for this scenario. */
-    public static class CodeNotGeneratedException extends ApiTestWorkflowException {
-        public CodeNotGeneratedException(String scriptId) {
-            super("Code is not present for scenario '" + scriptId + "'. Please generate code first.", HttpStatus.BAD_REQUEST);
+    /** Run was requested but no execution model exists yet for this scenario. */
+    public static class ExecutionModelNotGeneratedException extends ApiTestWorkflowException {
+        public ExecutionModelNotGeneratedException(String scriptId) {
+            super("An execution model is not present for scenario '" + scriptId + "'. Please generate code first.",
+                    HttpStatus.BAD_REQUEST);
         }
     }
 
-    /** LLM-generated code failed GeneratedCodeValidator's safety check (empty output or a
-     *  forbidden pattern like System.exit/ProcessBuilder/file I/O). Never persisted or run. */
-    public static class UnsafeGeneratedCodeException extends ApiTestWorkflowException {
-        public UnsafeGeneratedCodeException(String scriptId, String reason) {
-            super("Generated code for scenario '" + scriptId + "' failed safety validation: " + reason,
+    /** LLM-generated execution model failed ApiExecutionModelValidator's structural check
+     *  (missing method/endpoint, out-of-range status code, etc). Never persisted or run. */
+    public static class InvalidExecutionModelException extends ApiTestWorkflowException {
+        public InvalidExecutionModelException(String scriptId, String reason) {
+            super("Generated execution model for scenario '" + scriptId + "' failed validation: " + reason,
                     HttpStatus.UNPROCESSABLE_ENTITY);
         }
     }

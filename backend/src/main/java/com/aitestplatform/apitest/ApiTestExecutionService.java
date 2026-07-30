@@ -1,141 +1,98 @@
 package com.aitestplatform.apitest;
 
-import com.aitestplatform.common.ApiTestWorkflowException.CodeNotGeneratedException;
+import com.aitestplatform.common.ApiTestWorkflowException.ExecutionModelNotGeneratedException;
 import com.aitestplatform.common.ApiTestWorkflowException.ScenarioNotFoundException;
-import io.restassured.response.Response;
-import org.springframework.beans.factory.annotation.Value;
+import com.aitestplatform.domain.execution.api.ApiExecutionModel;
+import com.aitestplatform.domain.execution.api.ApiExecutionResult;
+import com.aitestplatform.infrastructure.execution.restassured.RestAssuredApiExecutor;
 import org.springframework.stereotype.Service;
 
-import javax.tools.*;
-import java.io.File;
-import java.lang.reflect.Method;
-import java.net.URLClassLoader;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
-import java.util.UUID;
 
 /**
- * Compiles generated Rest Assured Java source on the fly and runs it in a short-lived
- * process boundary. This is a *scaffold*: in production this should run inside the
- * dedicated `executor` container (see docker-compose.yml) with no outbound network access
- * beyond the target API under test, a hard wall-clock timeout, and a non-root user.
+ * Runs an ApiTestScript's execution model directly through RestAssuredApiExecutor — no
+ * source generation, no javac, no URLClassLoader. The LLM's output was already mapped into
+ * the domain ApiExecutionModel and validated back in ApiTestGenerationService.generateCode();
+ * this service's only remaining job is resolving the environment-specific baseUri against
+ * the model's endpoint and delegating execution to the executor.
  *
- * Convention: `generatedCode` is the BODY of a method with signature
- *   public static Response run(String baseUri) throws Exception { ... return response; }
+ * (This replaces the old compileAndRun() javac/URLClassLoader implementation entirely — that
+ * whole class of fat-jar-classpath bug is eliminated because there's no runtime compilation
+ * step anymore.)
  */
 @Service
 public class ApiTestExecutionService {
 
     private final ApiTestScriptRepository repository;
-    private final int timeoutSeconds;
+    private final RestAssuredApiExecutor executor;
 
-    public ApiTestExecutionService(ApiTestScriptRepository repository,
-                                    @Value("${execution.sandbox.timeout-seconds:60}") int timeoutSeconds) {
+    public ApiTestExecutionService(ApiTestScriptRepository repository, RestAssuredApiExecutor executor) {
         this.repository = repository;
-        this.timeoutSeconds = timeoutSeconds;
+        this.executor = executor;
     }
 
     public ApiTestScript execute(String scriptId, String baseUri) {
         ApiTestScript script = repository.findById(scriptId)
                 .orElseThrow(() -> new ScenarioNotFoundException(scriptId));
 
-        if (script.getGeneratedCode() == null || script.getGeneratedCode().isBlank()) {
-            throw new CodeNotGeneratedException(scriptId);
+        if (script.getExecutionModel() == null) {
+            throw new ExecutionModelNotGeneratedException(scriptId);
         }
 
         // Defense-in-depth: re-validate even though generateCode() already checked this,
-        // in case a script's code was ever written some other way (direct DB edit, a future
-        // "edit code" feature, etc).
-        GeneratedCodeValidator.validateGeneratedCode(scriptId, script.getGeneratedCode());
+        // in case a script's model was ever written some other way (direct DB edit, a
+        // future "edit model" feature, etc).
+        ApiExecutionModelValidator.validate(scriptId, script.getExecutionModel());
 
         script.setStatus(ScriptStatus.RUNNING);
         repository.save(script);
 
-        long start = System.currentTimeMillis();
-        try {
-            Response response = compileAndRun(script.getGeneratedCode(), baseUri);
-            long latency = System.currentTimeMillis() - start;
-            boolean passed = response.getStatusCode() < 400;
+        ApiExecutionModel resolved = withBaseUri(script.getExecutionModel(), baseUri);
+        ApiExecutionResult result = executor.execute(resolved);
 
-            script.setLastRunResult(new ApiTestScript.LastRunResult(
-                    response.getStatusCode(), latency, passed, response.getBody().asPrettyString()));
-            script.setStatus(passed ? ScriptStatus.PASSED : ScriptStatus.FAILED);
-        } catch (Exception e) {
-            long latency = System.currentTimeMillis() - start;
-            script.setLastRunResult(new ApiTestScript.LastRunResult(-1, latency, false, "Execution error: " + e.getMessage()));
-            script.setStatus(ScriptStatus.FAILED);
-        }
+        script.setLastRunResult(new ApiTestScript.LastRunResult(
+                result.actualStatus(), result.durationMs(), result.passed(),
+                result.errorMessage() != null ? result.errorMessage() : result.responseBody()));
+        script.setStatus(result.passed() ? ScriptStatus.PASSED : ScriptStatus.FAILED);
         return repository.save(script);
     }
 
     /**
-     * Runs every script in a project that currently has generated code; scripts still at
-     * SCENARIO_GENERATED (no code yet) are skipped rather than failing the whole batch,
+     * Runs every script in a project that currently has an execution model; scripts still
+     * at SCENARIO_GENERATED (no model yet) are skipped rather than failing the whole batch,
      * since a partially-authored suite is a normal state, not an error.
      */
     public List<ApiTestScript> executeAllRunnable(String projectId, String baseUri) {
         return repository.findByProjectId(projectId).stream()
-                .filter(s -> s.getGeneratedCode() != null && !s.getGeneratedCode().isBlank())
+                .filter(s -> s.getExecutionModel() != null)
                 .map(s -> execute(s.getId(), baseUri))
                 .toList();
     }
 
-    private Response compileAndRun(String generatedMethodBody, String baseUri) throws Exception {
-        String className = "GeneratedApiTest_" + UUID.randomUUID().toString().replace("-", "");
-        String source = """
-                import io.restassured.response.Response;
-                import static io.restassured.RestAssured.*;
-                import static org.hamcrest.Matchers.*;
-
-                public class %s {
-                    public static Response run(String baseUri) throws Exception {
-                        %s
-                    }
-                }
-                """.formatted(className, generatedMethodBody);
-        System.out.println("Classpath = " + System.getProperty("java.class.path"));
-        Path tempDir = Files.createTempDirectory("api-test-exec");
-        Path sourceFile = tempDir.resolve(className + ".java");
-        Files.writeString(sourceFile, source);
-
-        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-        if (compiler == null) {
-            throw new IllegalStateException("No system Java compiler available (JDK required, not just a JRE)");
+    /**
+     * baseUri is an environment concern (which host/port to hit right now), not something
+     * the LLM generates as part of the execution model — so it's merged in here, at the
+     * application layer, rather than being a field on ApiExecutionModel itself. If the
+     * model's endpoint is already an absolute URL, baseUri is left alone.
+     */
+    private ApiExecutionModel withBaseUri(ApiExecutionModel model, String baseUri) {
+        String endpoint = model.endpoint() == null ? "" : model.endpoint();
+        if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
+            return model;
         }
+        String base = baseUri == null ? "" : baseUri;
+        if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+        String path = endpoint.startsWith("/") ? endpoint : "/" + endpoint;
 
-        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
-            Iterable<? extends JavaFileObject> units = fileManager.getJavaFileObjects(sourceFile.toFile());
-            boolean ok = compiler.getTask(null, fileManager, null,
-                    List.of("-d", tempDir.toString()), null, units).call();
-            if (!ok) {
-                throw new IllegalStateException("Generated Rest Assured code failed to compile");
-            }
-        }
-
-        try (URLClassLoader classLoader = new URLClassLoader(
-                new java.net.URL[]{tempDir.toUri().toURL()}, getClass().getClassLoader())) {
-            Class<?> clazz = Class.forName(className, true, classLoader);
-            Method runMethod = clazz.getMethod("run", String.class);
-
-            var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
-            try {
-                var future = executor.submit(() -> (Response) runMethod.invoke(null, baseUri));
-                return future.get(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
-            } finally {
-                executor.shutdownNow();
-                deleteRecursively(tempDir.toFile());
-            }
-        }
-    }
-
-    private void deleteRecursively(File dir) {
-        File[] files = dir.listFiles();
-        if (files != null) {
-            for (File f : files) {
-                if (f.isDirectory()) deleteRecursively(f); else f.delete();
-            }
-        }
-        dir.delete();
+        return new ApiExecutionModel(
+                model.method(),
+                base + path,
+                model.headers(),
+                model.queryParams(),
+                model.pathParams(),
+                model.cookies(),
+                model.requestBody(),
+                model.expectedStatus(),
+                model.assertions());
     }
 }

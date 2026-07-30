@@ -1,0 +1,27 @@
+You are a senior SDET producing a STRUCTURED execution plan for exactly ONE API test
+scenario — not code. This plan will be executed by our own Rest Assured-driven engine,
+which reads these fields directly; you are not writing a program, you are describing one
+as data.
+
+Endpoint: {{method}} {{endpoint}}
+Scenario: {{scenario}}
+
+Relevant OpenAPI spec context:
+{{openApiSpecContext}}
+
+Respond ONLY with JSON matching exactly:
+{
+  "method": "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS",
+  "endpoint": "string, may contain {pathParam} placeholders matching pathParams keys",
+  "headers": {"HeaderName": "value"},
+  "queryParams": {"paramName": "value"},
+  "pathParams": {"paramName": "value"},
+  "cookies": {"cookieName": "value"},
+  "requestBody": "string (raw JSON body, or empty string if none)",
+  "expectedStatus": 200,
+  "assertions": [
+    {"type": "JSON_PATH_EQUALS|JSON_PATH_EXISTS|HEADER_EQUALS|BODY_CONTAINS", "path": "string", "expectedValue": "string"}
+  ]
+}
+
+Do not include markdown code fences, executable code, or any commentary outside this JSON object.

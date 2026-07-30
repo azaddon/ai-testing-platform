@@ -31,12 +31,21 @@ services:
       MONGODB_URI: mongodb://admin:qwerty@mongo:27017/ai_testing_platform?authSource=admin
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ports:
       - "8080:8080"
     volumes:
       - ~/.m2:/root/.m2   # Mount Maven cache
+    extra_hosts:
+      # Guarantees host.docker.internal resolves to the host machine. Docker Desktop
+      # usually provides this automatically on Windows/Mac, but WSL2 networking is
+      # inconsistent about it — without this line, a UI test run targeting
+      # host.docker.internal:<port> can hang for the full navigation timeout with no
+      # DNS resolution at all, which looks identical to "nothing is listening" but
+      # isn't the same problem.
+      - "host.docker.internal:host-gateway"
 
   frontend:
     build: ./frontend

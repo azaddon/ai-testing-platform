@@ -4,21 +4,25 @@ import com.aitestplatform.llm.dto.LlmDtos.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.List;
 import java.util.Map;
 
 /**
- * Default LlmProvider implementation, backed by the Gemini API.
+ * LlmProvider implementation backed by the Gemini API.
  * Uses gemini-3.5-flash for high-volume/low-latency tasks and gemini-3-pro for
  * tasks that need deeper reasoning. Falls back to gemini-2.5-pro/-flash via config
  * if 3.x is unavailable in a given account/region.
+ *
+ * NOTE: not @Primary — which implementation is actually used is decided solely by
+ * LlmProviderConfig.activeLlmProvider() based on `llm.provider`. Marking this
+ * @Primary previously caused every service to receive this bean directly via plain
+ * by-type injection, silently bypassing that switch entirely.
  */
 @Component
-@Primary
 public class GeminiProvider implements LlmProvider {
 
     private final WebClient geminiWebClient;
@@ -30,6 +34,7 @@ public class GeminiProvider implements LlmProvider {
     private final String fastModel;
     private final String reasoningModel;
     private final String visionModel;
+    private final int maxOutputTokens;
 
     public GeminiProvider(WebClient geminiWebClient,
                            PromptTemplateLoader prompts,
@@ -37,7 +42,8 @@ public class GeminiProvider implements LlmProvider {
                            @Value("${llm.gemini.api-key}") String apiKey,
                            @Value("${llm.gemini.fast-model}") String fastModel,
                            @Value("${llm.gemini.reasoning-model}") String reasoningModel,
-                           @Value("${llm.gemini.vision-model}") String visionModel) {
+                           @Value("${llm.gemini.vision-model}") String visionModel,
+                           @Value("${llm.gemini.max-output-tokens:8192}") int maxOutputTokens) {
         this.geminiWebClient = geminiWebClient;
         this.prompts = prompts;
         this.callLogRepository = callLogRepository;
@@ -45,6 +51,7 @@ public class GeminiProvider implements LlmProvider {
         this.fastModel = fastModel;
         this.reasoningModel = reasoningModel;
         this.visionModel = visionModel;
+        this.maxOutputTokens = maxOutputTokens;
     }
 
     @Override
@@ -86,20 +93,41 @@ public class GeminiProvider implements LlmProvider {
     }
 
     @Override
-    public GeneratedApiTestCode generateApiTestCode(ApiTestCodeGenRequest request) {
-        String prompt = prompts.render("api-code-generation.txt", Map.of(
+    public GeneratedApiExecutionModel generateApiExecutionModel(ApiExecutionModelGenRequest request) {
+        String prompt = prompts.render("api-execution-model-generation.txt", Map.of(
                 "endpoint", request.endpoint(),
                 "method", request.method(),
                 "scenario", request.scenario(),
                 "openApiSpecContext", request.openApiSpecContext() == null ? "" : request.openApiSpecContext()
         ));
-        String raw = callTextModel(reasoningModel, prompt, 0.2, "api-code-gen");
+        String raw = callTextModel(reasoningModel, prompt, 0.2, "api-execution-model-gen");
         try {
             JsonNode node = objectMapper.readTree(raw);
-            return new GeneratedApiTestCode(node.path("generatedCode").asText(), reasoningModel);
+            List<GeneratedApiAssertion> assertions = objectMapper.convertValue(
+                    node.path("assertions"),
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, GeneratedApiAssertion.class));
+            return new GeneratedApiExecutionModel(
+                    node.path("method").asText(),
+                    node.path("endpoint").asText(),
+                    toStringMap(node.path("headers")),
+                    toStringMap(node.path("queryParams")),
+                    toStringMap(node.path("pathParams")),
+                    toStringMap(node.path("cookies")),
+                    node.path("requestBody").asText(""),
+                    node.path("expectedStatus").asInt(200),
+                    assertions == null ? List.of() : assertions,
+                    reasoningModel);
         } catch (Exception e) {
-            throw new LlmResponseParseException("Failed to parse generated API test code", raw, e);
+            throw new LlmResponseParseException("Failed to parse generated API execution model", raw, e);
         }
+    }
+
+    private Map<String, String> toStringMap(JsonNode node) {
+        Map<String, String> map = new java.util.LinkedHashMap<>();
+        if (node != null && node.isObject()) {
+            node.fields().forEachRemaining(entry -> map.put(entry.getKey(), entry.getValue().asText()));
+        }
+        return map;
     }
 
     @Override
@@ -153,23 +181,31 @@ public class GeminiProvider implements LlmProvider {
                                     Map.of("inlineData", Map.of("mimeType", "image/png", "data", context.actualImageBase64()))
                             )
                     )),
-                    "generationConfig", Map.of("temperature", 0.1, "responseMimeType", "application/json")
+                    "generationConfig", Map.of(
+                            "temperature", 0.1,
+                            "responseMimeType", "application/json",
+                            "maxOutputTokens", maxOutputTokens,
+                            "thinkingConfig", Map.of("thinkingBudget", 0)
+                    )
             );
 
             String raw = geminiWebClient.post()
-                    .uri("/models/{model}:generateContent?key={key}", visionModel, apiKey)
+                    .uri("/models/{model}:generateContent", visionModel)
+                    .header("x-goog-api-key", apiKey)
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
 
+            checkNotTruncated(raw, "screenshot-analysis");
             String text = extractText(raw);
             ScreenshotAnalysisResult result = objectMapper.readValue(text, ScreenshotAnalysisResult.class);
             logCall(visionModel, "screenshot-analysis", start, true, null);
             return result;
         } catch (Exception e) {
-            logCall(visionModel, "screenshot-analysis", start, false, e.getMessage());
-            throw new LlmCallException("Gemini screenshot analysis failed", e);
+            String detail = describe(e);
+            logCall(visionModel, "screenshot-analysis", start, false, detail);
+            throw new LlmCallException("Gemini screenshot analysis failed: " + detail, e);
         }
     }
 
@@ -180,22 +216,69 @@ public class GeminiProvider implements LlmProvider {
         try {
             Map<String, Object> requestBody = Map.of(
                     "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))),
-                    "generationConfig", Map.of("temperature", temperature, "responseMimeType", "application/json")
+                    // Gemini 3.x models spend part of the output budget on internal "thinking"
+                    // before writing the visible response unless capped/disabled. For short
+                    // structured-output tasks like ours, that thinking was eating into
+                    // maxOutputTokens and truncating the actual JSON mid-object (see the
+                    // JsonEOFException this fixes).
+                    "generationConfig", Map.of(
+                            "temperature", temperature,
+                            "responseMimeType", "application/json",
+                            "maxOutputTokens", maxOutputTokens,
+                            "thinkingConfig", Map.of("thinkingBudget", 0)
+                    )
             );
 
             String raw = geminiWebClient.post()
-                    .uri("/models/{model}:generateContent?key={key}", model, apiKey)
+                    .uri("/models/{model}:generateContent", model)
+                    .header("x-goog-api-key", apiKey)
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
 
+            checkNotTruncated(raw, feature);
             String text = extractText(raw);
             logCall(model, feature, start, true, null);
             return text;
         } catch (Exception e) {
-            logCall(model, feature, start, false, e.getMessage());
-            throw new LlmCallException("Gemini call failed for feature " + feature, e);
+            String detail = describe(e);
+            logCall(model, feature, start, false, detail);
+            throw new LlmCallException("Gemini call failed for feature " + feature + ": " + detail, e);
+        }
+    }
+
+    /**
+     * Unwraps the actual reason behind a failed call instead of a bare "Gemini call
+     * failed" with no detail. WebClientResponseException carries Gemini's real error body
+     * (e.g. {"error":{"code":401,"message":"API key not valid","status":"UNAUTHENTICATED"}})
+     * which is the one thing that actually tells a caller what to fix; every other
+     * exception falls back to its own message, or its class name if that's null too.
+     */
+    private String describe(Exception e) {
+        if (e instanceof WebClientResponseException wcre) {
+            String body = wcre.getResponseBodyAsString();
+            return "HTTP " + wcre.getStatusCode().value() + (body.isBlank() ? "" : " - " + body);
+        }
+        if (e instanceof LlmCallException && e.getMessage() != null) {
+            // Already a deliberately-crafted message (e.g. the MAX_TOKENS truncation
+            // check below) — don't bury it behind a second generic wrapper.
+            return e.getMessage();
+        }
+        return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+    }
+
+    /**
+     * Fails fast with a clear message instead of letting a truncated response reach
+     * Jackson as a cryptic "Unexpected end-of-input" JsonEOFException.
+     */
+    private void checkNotTruncated(String rawResponseJson, String feature) throws Exception {
+        JsonNode root = objectMapper.readTree(rawResponseJson);
+        String finishReason = root.path("candidates").get(0).path("finishReason").asText("");
+        if ("MAX_TOKENS".equals(finishReason)) {
+            throw new LlmCallException(
+                    "Gemini truncated its response for feature '" + feature + "' (finishReason=MAX_TOKENS). "
+                            + "Increase llm.gemini.max-output-tokens or shorten the prompt/input.", null);
         }
     }
 

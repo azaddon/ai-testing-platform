@@ -27,9 +27,12 @@ public class ApiTestController {
     }
 
     /**
-     * Step 2: "Generate Code" button for one scenario.
-     * 404 if the scenario id doesn't exist; 409 if code was already generated for it;
-     * 422 if the LLM's output fails GeneratedCodeValidator's safety check.
+     * Step 2: "Generate Code" button for one scenario. Despite the name (kept for frontend
+     * compatibility), this generates a structured ApiExecutionModel, not source code — the
+     * "code" the frontend then displays is CodeArtifactRenderer's read-only rendering of
+     * that model, never anything compiled or executed.
+     * 404 if the scenario id doesn't exist; 409 if an execution model was already generated
+     * for it; 422 if the LLM's output fails ApiExecutionModelValidator's structural check.
      */
     @PostMapping("/api-tests/{scriptId}/generate-code")
     public ApiTestScript generateCode(@PathVariable String scriptId) {

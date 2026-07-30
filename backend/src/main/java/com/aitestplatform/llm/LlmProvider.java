@@ -15,11 +15,15 @@ public interface LlmProvider {
 
     GeneratedTestCases generateTestCases(TestCaseGenRequest request);
 
-    /** Step 1 of API test authoring: scenarios only, no Rest Assured code yet. */
+    /** Step 1 of API test authoring: scenarios only, no execution model yet. */
     GeneratedApiTestScenarios generateApiTestScenarios(ApiTestGenRequest request);
 
-    /** Step 2: generate Rest Assured code for exactly one previously-generated scenario. */
-    GeneratedApiTestCode generateApiTestCode(ApiTestCodeGenRequest request);
+    /**
+     * Step 2: generate a structured ApiExecutionModel for exactly one previously-generated
+     * scenario. This is DATA (method/endpoint/headers/params/assertions), never a code
+     * string — see GeneratedApiExecutionModel's javadoc.
+     */
+    GeneratedApiExecutionModel generateApiExecutionModel(ApiExecutionModelGenRequest request);
 
     List<LocatorSuggestion> generateLocators(LocatorGenRequest request);
 

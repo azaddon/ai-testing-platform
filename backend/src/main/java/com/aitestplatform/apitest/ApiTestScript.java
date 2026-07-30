@@ -1,5 +1,6 @@
 package com.aitestplatform.apitest;
 
+import com.aitestplatform.domain.execution.api.ApiExecutionModel;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
@@ -15,10 +16,23 @@ public class ApiTestScript {
     private String method;
     private String scenario;
 
-    /** Spec context captured at scenario-generation time, reused for accurate code generation. */
+    /** Spec context captured at scenario-generation time, reused for accurate model generation. */
     private String openApiSpecContext;
 
-    private String generatedCode; // null until "Generate Code" succeeds
+    /**
+     * Composition, not inheritance: this script HAS-A ApiExecutionModel; it doesn't extend
+     * one. Null until "Generate Code" succeeds. This is the data RestAssuredApiExecutor
+     * actually runs — see renderedCode below for the display-only counterpart.
+     */
+    private ApiExecutionModel executionModel;
+
+    /**
+     * A deterministically-rendered, human-readable preview built FROM executionModel by
+     * CodeArtifactRenderer. This is a display artifact only — it is never compiled, never
+     * passed to javac, and never executed. What runs is executionModel, interpreted
+     * directly by RestAssuredApiExecutor.
+     */
+    private String renderedCode;
 
     private ScriptStatus status = ScriptStatus.SCENARIO_GENERATED;
 
@@ -41,8 +55,10 @@ public class ApiTestScript {
     public void setScenario(String scenario) { this.scenario = scenario; }
     public String getOpenApiSpecContext() { return openApiSpecContext; }
     public void setOpenApiSpecContext(String openApiSpecContext) { this.openApiSpecContext = openApiSpecContext; }
-    public String getGeneratedCode() { return generatedCode; }
-    public void setGeneratedCode(String generatedCode) { this.generatedCode = generatedCode; }
+    public ApiExecutionModel getExecutionModel() { return executionModel; }
+    public void setExecutionModel(ApiExecutionModel executionModel) { this.executionModel = executionModel; }
+    public String getRenderedCode() { return renderedCode; }
+    public void setRenderedCode(String renderedCode) { this.renderedCode = renderedCode; }
     public ScriptStatus getStatus() { return status; }
     public void setStatus(ScriptStatus status) { this.status = status; }
     public LastRunResult getLastRunResult() { return lastRunResult; }

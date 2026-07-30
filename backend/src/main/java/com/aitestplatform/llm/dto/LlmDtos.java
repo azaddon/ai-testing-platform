@@ -32,21 +32,41 @@ public class LlmDtos {
             int count               // upper bound on total scenarios generated
     ) {}
 
-    /** Scenario only — no code yet. This is the output of the "Generate Scenario" step. */
+    /** Scenario only — no execution model yet. This is the output of the "Generate Scenario" step. */
     public record ApiScenario(String endpoint, String method, String scenario) {}
 
     public record GeneratedApiTestScenarios(List<ApiScenario> scenarios, String modelUsed) {}
 
     /** Input for the "Generate Code" step — one scenario at a time, plus enough spec
-     *  context for the LLM to produce accurate Rest Assured code for that endpoint. */
-    public record ApiTestCodeGenRequest(
+     *  context for the LLM to produce an accurate ApiExecutionModel for that endpoint. */
+    public record ApiExecutionModelGenRequest(
             String endpoint,
             String method,
             String scenario,
             String openApiSpecContext
     ) {}
 
-    public record GeneratedApiTestCode(String generatedCode, String modelUsed) {}
+    /**
+     * Wire-level shape of what the LLM returns for the API execution model — plain strings
+     * (method, assertion type) rather than our domain enums. The application layer maps
+     * this into the real domain com.aitestplatform.domain.execution.api.ApiExecutionModel;
+     * keeping this DTO separate from the domain model is the Clean Architecture boundary
+     * between "what an LLM response looks like" and "what our business logic works with".
+     */
+    public record GeneratedApiExecutionModel(
+            String method,
+            String endpoint,
+            Map<String, String> headers,
+            Map<String, String> queryParams,
+            Map<String, String> pathParams,
+            Map<String, String> cookies,
+            String requestBody,
+            int expectedStatus,
+            List<GeneratedApiAssertion> assertions,
+            String modelUsed
+    ) {}
+
+    public record GeneratedApiAssertion(String type, String path, String expectedValue) {}
 
     public record LocatorGenRequest(String domSnapshot, String targetDescription) {}
 

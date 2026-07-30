@@ -1,12 +1,29 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 
+interface ApiExecutionModel {
+  method: string;
+  endpoint: string;
+  headers: Record<string, string>;
+  queryParams: Record<string, string>;
+  pathParams: Record<string, string>;
+  cookies: Record<string, string>;
+  requestBody: string;
+  expectedStatus: number;
+  assertions: { type: string; path: string | null; expectedValue: string | null }[];
+}
+
 interface ApiTestScript {
   id: string;
   endpoint: string;
   method: string;
   scenario: string;
-  generatedCode: string | null;
+  // The data that actually runs (interpreted directly by RestAssuredApiExecutor — never
+  // compiled). Null until "Generate Code" succeeds.
+  executionModel: ApiExecutionModel | null;
+  // A read-only, deterministically-rendered preview of executionModel, for display only.
+  // This is never compiled or executed — see renderedCode below.
+  renderedCode: string | null;
   status: string; // scenario-generated | code-generated | running | passed | failed
   lastRunResult?: { statusCode: number; latencyMs: number; assertionsPassed: boolean; output: string };
 }
@@ -130,7 +147,7 @@ export default function ApiTestGenerator({ projectId }: { projectId: string }) {
       {loadingExisting && <p style={{ color: "#888" }}>Loading existing scenarios...</p>}
 
       {scripts.map((s) => {
-        const hasCode = !!s.generatedCode;
+        const hasCode = !!s.executionModel;
         const busy = !!rowBusy[s.id];
         const error = rowError[s.id];
 
@@ -144,9 +161,15 @@ export default function ApiTestGenerator({ projectId }: { projectId: string }) {
             </div>
 
             {hasCode ? (
-              <pre style={{ background: "#f6f8fa", padding: 12, overflowX: "auto", fontSize: 12 }}>
-                {s.generatedCode}
-              </pre>
+              <>
+                <p style={{ color: "#888", fontSize: 12, marginBottom: 4 }}>
+                  Preview only — this is rendered from the test's data and isn't compiled or run.
+                  The actual run executes the underlying request data directly.
+                </p>
+                <pre style={{ background: "#f6f8fa", padding: 12, overflowX: "auto", fontSize: 12 }}>
+                  {s.renderedCode}
+                </pre>
+              </>
             ) : (
               <p style={{ color: "#888", fontSize: 13 }}>No code generated yet for this scenario.</p>
             )}

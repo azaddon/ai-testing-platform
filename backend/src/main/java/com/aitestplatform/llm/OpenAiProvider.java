@@ -80,20 +80,41 @@ public class OpenAiProvider implements LlmProvider {
     }
 
     @Override
-    public GeneratedApiTestCode generateApiTestCode(ApiTestCodeGenRequest request) {
-        String prompt = prompts.render("api-code-generation.txt", Map.of(
+    public GeneratedApiExecutionModel generateApiExecutionModel(ApiExecutionModelGenRequest request) {
+        String prompt = prompts.render("api-execution-model-generation.txt", Map.of(
                 "endpoint", request.endpoint(),
                 "method", request.method(),
                 "scenario", request.scenario(),
                 "openApiSpecContext", request.openApiSpecContext() == null ? "" : request.openApiSpecContext()
         ));
-        String raw = chat(reasoningModel, prompt, 0.2, "api-code-gen");
+        String raw = chat(reasoningModel, prompt, 0.2, "api-execution-model-gen");
         try {
             JsonNode node = objectMapper.readTree(raw);
-            return new GeneratedApiTestCode(node.path("generatedCode").asText(), reasoningModel);
+            List<GeneratedApiAssertion> assertions = objectMapper.convertValue(
+                    node.path("assertions"),
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, GeneratedApiAssertion.class));
+            return new GeneratedApiExecutionModel(
+                    node.path("method").asText(),
+                    node.path("endpoint").asText(),
+                    toStringMap(node.path("headers")),
+                    toStringMap(node.path("queryParams")),
+                    toStringMap(node.path("pathParams")),
+                    toStringMap(node.path("cookies")),
+                    node.path("requestBody").asText(""),
+                    node.path("expectedStatus").asInt(200),
+                    assertions == null ? List.of() : assertions,
+                    reasoningModel);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to parse generated API test code: " + raw, e);
+            throw new RuntimeException("Failed to parse generated API execution model: " + raw, e);
         }
+    }
+
+    private Map<String, String> toStringMap(JsonNode node) {
+        Map<String, String> map = new java.util.LinkedHashMap<>();
+        if (node != null && node.isObject()) {
+            node.fields().forEachRemaining(entry -> map.put(entry.getKey(), entry.getValue().asText()));
+        }
+        return map;
     }
 
     @Override

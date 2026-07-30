@@ -12,23 +12,31 @@ spring:
       uri: ${MONGODB_URI:mongodb://localhost:27017/ai_testing_platform}
 
 llm:
-  provider: ${LLM_PROVIDER:gemini}   # gemini | openai
+  provider: ${LLM_PROVIDER:openai}   # gemini | openai (openai = Groq by default, see below)
   gemini:
     api-key: ${GEMINI_API_KEY:}
     base-url: https://generativelanguage.googleapis.com/v1beta
     fast-model: gemini-3.5-flash
     reasoning-model: gemini-3.5-flash
     vision-model: gemini-3.5-flash
+    max-output-tokens: 8192   # thinkingBudget is set to 0 for our structured-output calls,
+                              # so this budget goes entirely to the visible JSON response
   openai:
+    # Despite the name, this points at Groq's OpenAI-compatible endpoint by default —
+    # Groq has a free tier with much higher availability than Gemini's. Swap base-url
+    # back to https://api.openai.com/v1 (with real OpenAI model names) if you want actual
+    # OpenAI instead. Get a free Groq key at https://console.groq.com/keys
     api-key: ${OPENAI_API_KEY:}
-    base-url: https://api.openai.com/v1
-    fast-model: gpt-4.1-mini
-    reasoning-model: gpt-4.1
+    base-url: ${LLM_OPENAI_BASE_URL:https://api.groq.com/openai/v1}
+    fast-model: ${LLM_OPENAI_FAST_MODEL:llama-3.1-8b-instant}
+    reasoning-model: ${LLM_OPENAI_REASONING_MODEL:llama-3.3-70b-versatile}
 
 execution:
   sandbox:
     timeout-seconds: 60
     max-concurrent-runs: 5
+  playwright:
+    navigation-timeout-ms: 30000   # how long page.navigate() waits with waitUntil=COMMIT
 
 logging:
   level:
