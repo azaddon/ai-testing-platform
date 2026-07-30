@@ -53,7 +53,7 @@ public class OpenAiProvider implements LlmProvider {
                 "count", String.valueOf(request.count()),
                 "testTypes", String.join(", ", request.testTypes())
         ));
-        String raw = chat(fastModel, prompt, 0.3, "test-case-gen");
+        String raw = chatForList(fastModel, prompt, 0.3, "test-case-gen");
         try {
             List<GeneratedTestCase> testCases = objectMapper.readValue(raw,
                     objectMapper.getTypeFactory().constructCollectionType(List.class, GeneratedTestCase.class));
@@ -69,7 +69,7 @@ public class OpenAiProvider implements LlmProvider {
                 "openApiSpec", request.openApiSpec(),
                 "count", String.valueOf(request.count())
         ));
-        String raw = chat(reasoningModel, prompt, 0.2, "api-scenario-gen");
+        String raw = chatForList(reasoningModel, prompt, 0.2, "api-scenario-gen");
         try {
             List<ApiScenario> scenarios = objectMapper.readValue(raw,
                     objectMapper.getTypeFactory().constructCollectionType(List.class, ApiScenario.class));
@@ -123,7 +123,7 @@ public class OpenAiProvider implements LlmProvider {
                 "domSnapshot", request.domSnapshot(),
                 "targetDescription", request.targetDescription()
         ));
-        String raw = chat(fastModel, prompt, 0.2, "locator-gen");
+        String raw = chatForList(fastModel, prompt, 0.2, "locator-gen");
         try {
             return objectMapper.readValue(raw,
                     objectMapper.getTypeFactory().constructCollectionType(List.class, LocatorSuggestion.class));
@@ -150,8 +150,14 @@ public class OpenAiProvider implements LlmProvider {
 
     @Override
     public String summarizeLogChunk(String logChunk) {
+        // Plain prose out, not JSON — unlike every other feature here, this prompt asks for
+        // 2-4 sentences of text, so it uses chatPlainText() instead of chat()/chatForList().
+        // Forcing response_format=json_object on a free-text prompt (as the old shared chat()
+        // path did) doesn't error, it just makes the model wrap the summary in some arbitrary
+        // JSON object — which then shows up verbatim as the "log summary" in FailureAnalysis,
+        // e.g. {"summary": "..."} instead of readable text.
         String prompt = prompts.render("log-chunk-summary.txt", Map.of("logChunk", logChunk));
-        return chat(fastModel, prompt, 0.2, "log-summary");
+        return chatPlainText(fastModel, prompt, 0.2, "log-summary");
     }
 
     @Override
@@ -162,11 +168,135 @@ public class OpenAiProvider implements LlmProvider {
                 "Screenshot analysis via OpenAiProvider is not wired up in this scaffold; use GeminiProvider or extend this method with a vision-capable model call.");
     }
 
+    /**
+     * Like chat(), but for prompts (shared with GeminiProvider) that ask the model to respond
+     * with a top-level JSON ARRAY. OpenAI-compatible response_format={"type":"json_object"}
+     * legally forbids a bare array as the top-level response — Gemini has no such restriction,
+     * which is why these prompts were written array-first. The system message below asks the
+     * model to wrap the array as {"items": [...]} instead, and unwrapListPayload() below
+     * extracts it back out so callers can keep parsing a plain JSON array same as before.
+     *
+     * This was found the hard way on Groq's llama-3.1-8b-instant: given a prompt saying
+     * "respond ONLY with a JSON array" plus an API constraint saying "must be an object", it
+     * sometimes ignored the {"items": [...]} wrapping instruction too and returned a single
+     * bare object (one scenario/test case/locator) instead of an array of them — exactly the
+     * "Failed to parse generated API scenarios: { ...one object... }" error this fixes.
+     * unwrapListPayload() handles all three shapes (proper {"items":[...]} wrapper, a bare
+     * array despite the instructions, or a single ungrouped object) rather than trusting any
+     * one model to follow the format instruction perfectly on every call.
+     */
+    private String chatForList(String model, String prompt, double temperature, String feature) {
+        long start = System.currentTimeMillis();
+        try {
+            Map<String, Object> requestBody = Map.of(
+                    "model", model,
+                    "temperature", temperature,
+                    "response_format", Map.of("type", "json_object"),
+                    "messages", List.of(
+                            Map.of("role", "system", "content",
+                                    "You always respond with valid JSON only, no markdown fences. "
+                                            + "Your response MUST be a single JSON object (never a bare array) — "
+                                            + "wrap the requested list in an object with exactly one field named "
+                                            + "\"items\" whose value is the JSON array, e.g. {\"items\": [ ... ]}."),
+                            Map.of("role", "user", "content", prompt)
+                    )
+            );
+
+            String raw = openAiWebClient.post()
+                    .uri("/chat/completions")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+
+            JsonNode root = objectMapper.readTree(raw);
+            String content = root.path("choices").get(0).path("message").path("content").asText();
+            callLogRepository.save(new LlmCallLog(name(), model, feature,
+                    root.path("usage").path("prompt_tokens").asInt(0),
+                    root.path("usage").path("completion_tokens").asInt(0),
+                    System.currentTimeMillis() - start, true, null));
+            return unwrapListPayload(content);
+        } catch (Exception e) {
+            callLogRepository.save(new LlmCallLog(name(), model, feature, 0, 0,
+                    System.currentTimeMillis() - start, false, e.getMessage()));
+            throw new RuntimeException("OpenAI call failed for feature " + feature, e);
+        }
+    }
+
+    private String unwrapListPayload(String content) {
+        try {
+            JsonNode root = objectMapper.readTree(content);
+            if (root.isArray()) {
+                return content;
+            }
+            if (root.isObject()) {
+                if (root.has("items") && root.get("items").isArray()) {
+                    return root.get("items").toString();
+                }
+                // Some other object shape (e.g. wrapped under a different key, or a single
+                // bare item instead of a one-item array) — prefer the first array field found
+                // over guessing at a key name; otherwise fall back to wrapping the whole
+                // object as a single-element array so one still-usable item beats a hard failure.
+                var fields = root.fields();
+                while (fields.hasNext()) {
+                    var entry = fields.next();
+                    if (entry.getValue().isArray()) {
+                        return entry.getValue().toString();
+                    }
+                }
+                return "[" + root + "]";
+            }
+        } catch (Exception ignored) {
+            // Not valid JSON at all — fall through and let the caller's own parse attempt
+            // fail with the original content, so the resulting error still shows the real
+            // raw model output instead of a secondary, more confusing parse error.
+        }
+        return content;
+    }
+
+    /** No response_format constraint and no "respond with JSON" system message — for prompts
+     *  (like log-chunk-summary.txt) whose expected output is prose, not structured data. */
+    private String chatPlainText(String model, String prompt, double temperature, String feature) {
+        long start = System.currentTimeMillis();
+        try {
+            Map<String, Object> requestBody = Map.of(
+                    "model", model,
+                    "temperature", temperature,
+                    "messages", List.of(
+                            Map.of("role", "system", "content", "You are concise and factual. Respond in plain text only, no markdown."),
+                            Map.of("role", "user", "content", prompt)
+                    )
+            );
+
+            String raw = openAiWebClient.post()
+                    .uri("/chat/completions")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+
+            JsonNode root = objectMapper.readTree(raw);
+            String content = root.path("choices").get(0).path("message").path("content").asText();
+            callLogRepository.save(new LlmCallLog(name(), model, feature,
+                    root.path("usage").path("prompt_tokens").asInt(0),
+                    root.path("usage").path("completion_tokens").asInt(0),
+                    System.currentTimeMillis() - start, true, null));
+            return content;
+        } catch (Exception e) {
+            callLogRepository.save(new LlmCallLog(name(), model, feature, 0, 0,
+                    System.currentTimeMillis() - start, false, e.getMessage()));
+            throw new RuntimeException("OpenAI call failed for feature " + feature, e);
+        }
+    }
+
     private String chat(String model, String prompt, double temperature, String feature) {
-        // NOTE: OpenAI's json_object response_format requires a top-level JSON object, not an
-        // array. The shared scenario-generation prompt asks for a top-level array; if you
-        // deploy with llm.provider=openai, either wrap that prompt's output in an object for
-        // this provider, or use response_format: json_schema with an array-wrapping schema.
+        // NOTE: this is only used for calls whose expected shape is a single JSON object
+        // (generateApiExecutionModel, analyzeFailure). List-returning calls use chatForList()
+        // and plain-text calls use chatPlainText() — see their javadocs for why.
         long start = System.currentTimeMillis();
         try {
             Map<String, Object> requestBody = Map.of(

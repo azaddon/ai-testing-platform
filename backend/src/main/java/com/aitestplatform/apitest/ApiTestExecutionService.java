@@ -4,9 +4,13 @@ import com.aitestplatform.common.ApiTestWorkflowException.ExecutionModelNotGener
 import com.aitestplatform.common.ApiTestWorkflowException.ScenarioNotFoundException;
 import com.aitestplatform.domain.execution.api.ApiExecutionModel;
 import com.aitestplatform.domain.execution.api.ApiExecutionResult;
+import com.aitestplatform.execution.TestRun;
+import com.aitestplatform.execution.TestRunRepository;
+import com.aitestplatform.failureanalysis.FailureAnalysisService;
 import com.aitestplatform.infrastructure.execution.restassured.RestAssuredApiExecutor;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -19,16 +23,28 @@ import java.util.List;
  * (This replaces the old compileAndRun() javac/URLClassLoader implementation entirely — that
  * whole class of fat-jar-classpath bug is eliminated because there's no runtime compilation
  * step anymore.)
+ *
+ * Also writes a TestRun(type="api") per execution — previously this service only updated the
+ * ApiTestScript's own lastRunResult, so API executions were invisible to AnalyticsService and
+ * TestRunController.list(), which both read only the testRun collection. UI runs (via
+ * TestRunOrchestratorService) always had this; API runs never did, which is why the dashboard
+ * showed "ui" rows only. Failed runs also auto-trigger FailureAnalysisService so the frontend's
+ * GET /analysis call (fired as soon as it sees status=="failed") has something to find.
  */
 @Service
 public class ApiTestExecutionService {
 
     private final ApiTestScriptRepository repository;
     private final RestAssuredApiExecutor executor;
+    private final TestRunRepository testRunRepository;
+    private final FailureAnalysisService failureAnalysisService;
 
-    public ApiTestExecutionService(ApiTestScriptRepository repository, RestAssuredApiExecutor executor) {
+    public ApiTestExecutionService(ApiTestScriptRepository repository, RestAssuredApiExecutor executor,
+                                    TestRunRepository testRunRepository, FailureAnalysisService failureAnalysisService) {
         this.repository = repository;
         this.executor = executor;
+        this.testRunRepository = testRunRepository;
+        this.failureAnalysisService = failureAnalysisService;
     }
 
     public ApiTestScript execute(String scriptId, String baseUri) {
@@ -47,6 +63,14 @@ public class ApiTestExecutionService {
         script.setStatus(ScriptStatus.RUNNING);
         repository.save(script);
 
+        TestRun run = new TestRun();
+        run.setProjectId(script.getProjectId());
+        run.setSuiteId(scriptId);
+        run.setType("api");
+        run.setStatus("running");
+        run.setStartedAt(Instant.now());
+        run = testRunRepository.save(run);
+
         ApiExecutionModel resolved = withBaseUri(script.getExecutionModel(), baseUri);
         ApiExecutionResult result = executor.execute(resolved);
 
@@ -54,7 +78,35 @@ public class ApiTestExecutionService {
                 result.actualStatus(), result.durationMs(), result.passed(),
                 result.errorMessage() != null ? result.errorMessage() : result.responseBody()));
         script.setStatus(result.passed() ? ScriptStatus.PASSED : ScriptStatus.FAILED);
-        return repository.save(script);
+        repository.save(script);
+
+        String runStatus = result.passed() ? "passed" : "failed";
+        run.setStatus(runStatus);
+        run.setFinishedAt(Instant.now());
+        run.setResults(List.of(new TestRun.StepResult(scriptId, runStatus, result.durationMs(), result.errorMessage())));
+
+        if (!result.passed()) {
+            analyzeFailure(run.getId(), result);
+        }
+        testRunRepository.save(run);
+
+        return script;
+    }
+
+    /**
+     * Best-effort: runs BEFORE the TestRun's own save so the FailureAnalysis document already
+     * exists in Mongo by the time the frontend sees status=="failed" over the dashboard/detail
+     * poll and fires its GET /analysis call. A failed LLM call here (rate limit, provider
+     * outage) must never mask the actual test result, so any exception is swallowed.
+     */
+    private void analyzeFailure(String runId, ApiExecutionResult result) {
+        try {
+            String errorMessage = result.errorMessage() != null ? result.errorMessage()
+                    : "Request completed (HTTP " + result.actualStatus() + ") but one or more assertions failed.";
+            failureAnalysisService.analyze(runId, errorMessage, null, result.responseBody(), null);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     /**

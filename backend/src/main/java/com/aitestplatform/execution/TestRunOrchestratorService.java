@@ -1,39 +1,36 @@
 package com.aitestplatform.execution;
 
-import com.aitestplatform.domain.execution.ui.UiExecutionResult;
-import com.aitestplatform.infrastructure.execution.playwright.PlaywrightUiExecutor;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Coordinates a TestRun across one or more UI test scripts, updating Mongo and pushing
- * live progress over the WebSocket channel as each step completes. API-test runs are
- * triggered separately via ApiTestExecutionService (see ApiTestController) since Rest
- * Assured tests don't need a browser or step-by-step streaming.
+ * Coordinates a TestRun across one or more UI test scripts. Creates the TestRun record, then
+ * hands the actual execution off to TestRunExecutionWorker.
  *
- * Delegates to PlaywrightUiExecutor, which interprets each script's UiExecutionModel
- * directly — no source generation, no javac, no reflective invocation.
+ * IMPORTANT: this class must NOT execute the run itself. It used to (an @Async executeAsync()
+ * method living right here, called as `executeAsync(...)` from startUiRun() below) — but a
+ * method calling another @Async method on itself is Spring's classic self-invocation trap:
+ * the call bypasses the proxy that makes @Async actually asynchronous, so it silently ran
+ * synchronously on the HTTP request thread instead, AND that old version had no try/catch
+ * around the Playwright loop — so any uncaught exception (browser launch failure, target
+ * unreachable, etc.) left the TestRun stuck at status="running" forever, exactly like the
+ * stuck rows that showed up on the dashboard. TestRunExecutionWorker exists specifically to
+ * live in its own bean (so @Async is real) and wraps execution in try/catch/finally (so a
+ * failure always reaches a terminal status). This class's only job now is bookkeeping: create
+ * the run, delegate, return immediately.
  */
 @Service
 public class TestRunOrchestratorService {
 
     private final TestRunRepository testRunRepository;
-    private final UiTestScriptRepository uiTestScriptRepository;
-    private final PlaywrightUiExecutor playwrightUiExecutor;
-    private final TestRunWebSocketHandler webSocketHandler;
+    private final TestRunExecutionWorker executionWorker;
 
     public TestRunOrchestratorService(TestRunRepository testRunRepository,
-                                       UiTestScriptRepository uiTestScriptRepository,
-                                       PlaywrightUiExecutor playwrightUiExecutor,
-                                       TestRunWebSocketHandler webSocketHandler) {
+                                       TestRunExecutionWorker executionWorker) {
         this.testRunRepository = testRunRepository;
-        this.uiTestScriptRepository = uiTestScriptRepository;
-        this.playwrightUiExecutor = playwrightUiExecutor;
-        this.webSocketHandler = webSocketHandler;
+        this.executionWorker = executionWorker;
     }
 
     public TestRun startUiRun(String projectId, String suiteId, List<String> uiTestScriptIds) {
@@ -45,39 +42,7 @@ public class TestRunOrchestratorService {
         run.setStartedAt(Instant.now());
         run = testRunRepository.save(run);
 
-        executeAsync(run.getId(), uiTestScriptIds);
+        executionWorker.execute(run.getId(), uiTestScriptIds);
         return run;
-    }
-
-    @Async
-    public void executeAsync(String runId, List<String> uiTestScriptIds) {
-        TestRun run = testRunRepository.findById(runId).orElseThrow();
-        run.setStatus("running");
-        testRunRepository.save(run);
-        webSocketHandler.broadcast(runId, run);
-
-        List<TestRun.StepResult> results = new ArrayList<>();
-        boolean anyFailed = false;
-
-        for (String scriptId : uiTestScriptIds) {
-            UiTestScript script = uiTestScriptRepository.findById(scriptId).orElse(null);
-            if (script == null || script.getExecutionModel() == null) continue;
-
-            UiExecutionResult result = playwrightUiExecutor.execute(script.getExecutionModel());
-
-            String status = result.passed() ? "passed" : "failed";
-            anyFailed = anyFailed || !result.passed();
-            results.add(new TestRun.StepResult(
-                    script.getTestCaseId(), status, result.durationMs(), result.errorMessage()));
-
-            run.setResults(new ArrayList<>(results));
-            webSocketHandler.broadcast(runId, run);
-        }
-
-        run.setStatus(anyFailed ? "failed" : "passed");
-        run.setFinishedAt(Instant.now());
-        run.setResults(results);
-        testRunRepository.save(run);
-        webSocketHandler.broadcast(runId, run);
     }
 }

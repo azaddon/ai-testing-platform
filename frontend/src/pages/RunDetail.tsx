@@ -31,13 +31,37 @@ export default function RunDetail() {
 
   useEffect(() => {
     if (!runId) return;
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-    api.getTestRun(runId).then(setRun as any);
+    const refresh = () => {
+      api.getTestRun(runId).then((data: any) => {
+        if (cancelled) return;
+        setRun(data);
+        // Stop polling once the run reaches a terminal state — nothing left to refresh.
+        if (pollTimer && (data.status === "passed" || data.status === "failed")) {
+          clearInterval(pollTimer);
+        }
+      });
+    };
 
-    // Live updates while the run is in progress; falls back to the initial fetch above
-    // once the run finishes and the socket closes.
-    const socket = openTestRunSocket(runId, (data) => setRun(data));
-    return () => socket.close();
+    refresh();
+
+    // The WebSocket gives low-latency updates while a run is in progress, but it's push-only
+    // with no reconciliation: if the run finishes before the socket finishes connecting (or
+    // the connection drops), the final status is lost and this page would otherwise be stuck
+    // showing whatever it saw at mount forever — the dashboard doesn't have this problem
+    // because it re-polls via REST on a timer regardless of any socket. Polling here too (every
+    // 3s, same pattern as Dashboard.tsx) makes this page self-heal instead of depending on the
+    // socket ever the source of truth for the final result.
+    pollTimer = setInterval(refresh, 3000);
+    const socket = openTestRunSocket(runId, (data) => !cancelled && setRun(data));
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
+      socket.close();
+    };
   }, [runId]);
 
   useEffect(() => {
