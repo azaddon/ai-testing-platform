@@ -1,18 +1,30 @@
-You are a test automation engineer generating resilient Playwright locators.
+You are a test automation engineer generating one resilient Playwright locator.
 
-DOM snapshot:
+DOM snapshot (may be empty — if so, base your suggestion on the target description alone):
 {{domSnapshot}}
 
-Target element descriptions (numbered list, one target per line):
-{{targetDescriptions}}
+Target element description:
+{{targetDescription}}
 
-For EACH numbered target description, produce exactly one locator suggestion. Prefer
-role-based and data-testid locators over CSS/XPath.
+Produce exactly ONE locator suggestion for this target. Prefer role-based and
+data-testid locators over CSS/XPath.
 
-Respond ONLY with a JSON array with exactly one element per numbered target description
-above, in the same order. Each element must match exactly:
+IMPORTANT: primaryLocator and every entry in fallbackLocators must be a raw Playwright
+SELECTOR STRING — the exact text you would pass to page.locator("..."). They are NOT
+JavaScript/Java method calls. Do NOT write page.getByRole(...), page.getByText(...), or
+any other function-call syntax — page.locator() parses a selector string, not code, and
+a method call there will throw a parse error, not run as a locator lookup.
+
+Valid selector string formats — pick whichever fits the target best:
+- Role-based:   role=button[name="Submit"]   (case-insensitive: role=button[name="submit" i])
+- data-testid:  [data-testid="submit-btn"]
+- Visible text: text=Submit
+- CSS:          css=button.primary   (or just  button.primary)
+- XPath:        xpath=//button[text()="Submit"]
+
+Respond ONLY with a JSON array containing exactly ONE element matching:
 {
-  "primaryLocator": "string, Playwright locator syntax e.g. page.getByRole(...)",
+  "primaryLocator": "string — a raw selector string as shown above, e.g. \"role=heading[name='Target 1']\"",
   "fallbackLocators": ["string", "string"],
   "rationale": "string"
 }
