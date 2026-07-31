@@ -16,9 +16,26 @@ interface TestRun {
   startedAt: string;
 }
 
+// One row per day, e.g. {day: "2026-07-30", passed: 5, failed: 2} — matches
+// AnalyticsService.trends()'s reshaped output (one column per status that occurred that day).
+interface TrendRow {
+  day: string;
+  [status: string]: string | number;
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  passed: "#1a7f37",
+  failed: "#cf222e",
+  running: "#9a6700",
+  queued: "#57606a",
+  flaky: "#bf8700"
+};
+const STATUS_ORDER = ["passed", "failed", "running", "queued", "flaky"];
+
 export default function Dashboard({ projectId }: { projectId: string }) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [runs, setRuns] = useState<TestRun[]>([]);
+  const [trends, setTrends] = useState<TrendRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -26,13 +43,15 @@ export default function Dashboard({ projectId }: { projectId: string }) {
 
     async function load() {
       try {
-        const [summaryData, runsData] = await Promise.all([
+        const [summaryData, runsData, trendsData] = await Promise.all([
           api.dashboardSummary(projectId) as Promise<Summary>,
-          api.listTestRuns(projectId) as Promise<TestRun[]>
+          api.listTestRuns(projectId) as Promise<TestRun[]>,
+          api.trends(projectId, 30) as Promise<TrendRow[]>
         ]);
         if (!cancelled) {
           setSummary(summaryData);
           setRuns(runsData);
+          setTrends(trendsData);
           setError(null);
         }
       } catch (e: any) {
@@ -63,6 +82,11 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           <StatCard label="Pass rate" value={`${Math.round(summary.passRate * 100)}%`} />
         </div>
       )}
+
+      <h3>Trend (last 30 days)</h3>
+      <div style={{ marginBottom: 24 }}>
+        <TrendChart data={trends} />
+      </div>
 
       <h3>Recent runs</h3>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -110,12 +134,65 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    passed: "#1a7f37",
-    failed: "#cf222e",
-    running: "#9a6700",
-    queued: "#57606a",
-    flaky: "#bf8700"
-  };
-  return <span style={{ color: colors[status] ?? "#57606a", fontWeight: 600 }}>{status}</span>;
+  return <span style={{ color: STATUS_COLORS[status] ?? "#57606a", fontWeight: 600 }}>{status}</span>;
+}
+
+// Dependency-free stacked bar chart (plain inline SVG) — the app has no chart library
+// installed, and this is a small enough visualization not to warrant adding one. Each bar
+// is one day; segments stack passed/failed/running/etc. on top of each other, tallest
+// possible bar scaled to the day with the most total runs in the window.
+function TrendChart({ data }: { data: TrendRow[] }) {
+  if (data.length === 0) {
+    return <p style={{ color: "#888", fontSize: 13 }}>No runs in this window yet — the trend will appear once some exist.</p>;
+  }
+
+  const chartHeight = 140;
+  const barGap = 6;
+  const barWidth = 28;
+  const chartWidth = data.length * (barWidth + barGap);
+  const maxTotal = Math.max(
+    1,
+    ...data.map((d) => STATUS_ORDER.reduce((sum, s) => sum + (Number(d[s]) || 0), 0))
+  );
+
+  return (
+    <div>
+      <div style={{ overflowX: "auto" }}>
+        <svg width={chartWidth} height={chartHeight + 24} style={{ display: "block" }}>
+          {data.map((d, i) => {
+            const x = i * (barWidth + barGap);
+            let yOffset = chartHeight;
+            const bars = STATUS_ORDER.map((status) => {
+              const count = Number(d[status]) || 0;
+              if (count === 0) return null;
+              const barHeight = (count / maxTotal) * chartHeight;
+              yOffset -= barHeight;
+              return (
+                <rect key={status} x={x} y={yOffset} width={barWidth} height={barHeight}
+                      fill={STATUS_COLORS[status] ?? "#57606a"}>
+                  <title>{`${d.day} — ${status}: ${count}`}</title>
+                </rect>
+              );
+            });
+            return (
+              <g key={d.day}>
+                {bars}
+                <text x={x + barWidth / 2} y={chartHeight + 16} textAnchor="middle" fontSize="9" fill="#888">
+                  {d.day.slice(5)}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#555", marginTop: 8 }}>
+        {STATUS_ORDER.map((status) => (
+          <span key={status} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ width: 10, height: 10, background: STATUS_COLORS[status], display: "inline-block", borderRadius: 2 }} />
+            {status}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 }

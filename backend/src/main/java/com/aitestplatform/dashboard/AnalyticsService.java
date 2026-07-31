@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -47,8 +49,14 @@ public class AnalyticsService {
     /**
      * Pass/fail trend over a rolling window, bucketed by day. `range` is expressed as
      * "30d" / "7d" style strings for simplicity; parse into a real Duration in production.
+     *
+     * Reshapes Mongo's raw aggregation rows — one row per (day, status) pair, e.g.
+     * {_id: {day: "2026-07-30", status: "passed"}, count: 5} — into one row per day with a
+     * column per status, e.g. {day: "2026-07-30", passed: 5, failed: 2}. That's the shape a
+     * chart can consume directly, and it also stops a MongoDB driver type (org.bson.Document)
+     * from leaking out through the REST API as this endpoint's response type.
      */
-    public List<Document> trends(String projectId, int days) {
+    public List<Map<String, Object>> trends(String projectId, int days) {
         Instant since = Instant.now().minus(days, ChronoUnit.DAYS);
 
         Aggregation aggregation = newAggregation(
@@ -61,7 +69,21 @@ public class AnalyticsService {
         );
 
         AggregationResults<Document> results = mongoTemplate.aggregate(aggregation, "testRun", Document.class);
-        return results.getMappedResults();
+
+        Map<String, Map<String, Object>> byDay = new LinkedHashMap<>();
+        for (Document row : results.getMappedResults()) {
+            Document id = (Document) row.get("_id");
+            String day = id.getString("day");
+            String status = id.getString("status");
+            int count = row.getInteger("count", 0);
+            Map<String, Object> dayRow = byDay.computeIfAbsent(day, d -> {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("day", d);
+                return r;
+            });
+            dayRow.put(status, count);
+        }
+        return new ArrayList<>(byDay.values());
     }
 
     /** Flakiness score = failures / total runs over the rolling window, per test case. */

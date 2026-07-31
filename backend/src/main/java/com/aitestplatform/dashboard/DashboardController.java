@@ -1,6 +1,5 @@
 package com.aitestplatform.dashboard;
 
-import org.bson.Document;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -21,9 +20,10 @@ public class DashboardController {
         return analyticsService.summary(projectId);
     }
 
+    /** One row per day, e.g. {"day":"2026-07-30","passed":5,"failed":2} — ready to chart directly. */
     @GetMapping("/projects/{projectId}/analytics/trends")
-    public List<Document> trends(@PathVariable String projectId,
-                                  @RequestParam(defaultValue = "30") int days) {
+    public List<Map<String, Object>> trends(@PathVariable String projectId,
+                                             @RequestParam(defaultValue = "30") int days) {
         return analyticsService.trends(projectId, days);
     }
 }
