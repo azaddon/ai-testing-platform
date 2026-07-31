@@ -1,5 +1,7 @@
 package com.aitestplatform.execution;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
@@ -26,6 +28,8 @@ import java.util.List;
 @Component
 public class TestRunExecutionWorker {
 
+    private static final Logger log = LoggerFactory.getLogger(TestRunExecutionWorker.class);
+
     private final TestRunRepository testRunRepository;
     private final UiTestScriptRepository uiTestScriptRepository;
     private final PlaywrightUiExecutor playwrightUiExecutor;
@@ -46,6 +50,7 @@ public class TestRunExecutionWorker {
 
     @Async
     public void execute(String runId, List<String> uiTestScriptIds) {
+        log.info("Test run {} starting: {} script(s)", runId, uiTestScriptIds.size());
         TestRun run = testRunRepository.findById(runId).orElseThrow();
         run.setStatus(ScriptStatus.RUNNING.toString());
         testRunRepository.save(run);
@@ -56,8 +61,13 @@ public class TestRunExecutionWorker {
         try {
             for (String scriptId : uiTestScriptIds) {
                 UiTestScript script = uiTestScriptRepository.findById(scriptId).orElse(null);
-                if (script == null || script.getExecutionModel() == null) continue;
+                if (script == null || script.getExecutionModel() == null) {
+                    log.warn("Test run {}: script {} skipped (not found or no execution model)", runId, scriptId);
+                    continue;
+                }
 
+                log.info("Test run {}: executing script {} against url='{}'", runId, scriptId,
+                        script.getExecutionModel().url());
                 UiExecutionResult result = playwrightUiExecutor.execute(script.getExecutionModel());
 
                 String status = result.passed() ? ScriptStatus.PASSED.toString() : ScriptStatus.FAILED.toString();
@@ -72,7 +82,7 @@ public class TestRunExecutionWorker {
 
             run.setStatus(anyFailed ? ScriptStatus.FAILED.toString() : ScriptStatus.PASSED.toString());
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Test run {} crashed with an uncaught exception", runId, e);
 
             run.setStatus(ScriptStatus.FAILED.toString());
 
@@ -95,6 +105,7 @@ public class TestRunExecutionWorker {
             run.setFinishedAt(java.time.Instant.now());
             testRunRepository.save(run);
             webSocketHandler.broadcast(runId, run);
+            log.info("Test run {} finished: status={}", runId, run.getStatus());
         }
     }
 
@@ -110,7 +121,7 @@ public class TestRunExecutionWorker {
                     .collect(java.util.stream.Collectors.joining("\n"));
             failureAnalysisService.analyze(runId, errorMessage, null, errorMessage, null);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Test run {}: automatic failure analysis threw (test result is unaffected)", runId, e);
         }
     }
 }
