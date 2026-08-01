@@ -8,6 +8,7 @@ import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.options.WaitUntilState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -100,9 +101,13 @@ public class PlaywrightUiExecutor implements TestExecutor<UiExecutionModel, UiEx
                 // seccomp=unconfined in docker-compose.yml); without this flag, sandbox
                 // initialization can silently misbehave in exactly the same way. Both are
                 // the standard pairing for running Chromium headless inside Docker/CI.
+                // --disable-http2: some real sites' WAF/anti-bot layer resets or mangles HTTP/2
+                // frames for automated/headless traffic (seen live against makemytrip.com —
+                // net::ERR_HTTP2_PROTOCOL_ERROR on the very first navigate, before any content
+                // loads). Forcing HTTP/1.1 sidesteps that class of failure entirely.
                 Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions()
                         .setHeadless(true)
-                        .setArgs(List.of("--disable-dev-shm-usage", "--no-sandbox")));
+                        .setArgs(List.of("--disable-dev-shm-usage", "--no-sandbox", "--disable-http2")));
                 try {
                     Page page = browser.newPage();
 
@@ -197,12 +202,36 @@ public class PlaywrightUiExecutor implements TestExecutor<UiExecutionModel, UiEx
         Locator locator = resolveLocator(page, step.locatorRef(), locatorsByRef);
         switch (step.action()) {
             case CLICK -> locator.click();
-            case FILL -> locator.fill(step.value());
+            case FILL -> fillWithClickFallback(locator, step.value());
             case HOVER -> locator.hover();
             case SELECT_OPTION -> locator.selectOption(step.value());
             case PRESS_KEY -> locator.press(step.value());
             case CHECK -> locator.check();
             case UNCHECK -> locator.uncheck();
+        }
+    }
+
+    /**
+     * Self-healing safety net for the FILL/CLICK mismatch class: UiTestScriptGenerationService's
+     * classify() now checks the resolved locator's role before emitting FILL, but that's a
+     * generation-time, string-based check — it can't see what the element actually is at
+     * runtime. This is the runtime backstop: if fill() is attempted on something that turns out
+     * not to be fillable (a button, a submit input, a link — exactly what broke saucedemo's
+     * login step: "Input of type \"submit\" cannot be filled"), fall back to click() instead of
+     * failing the whole run outright. Only triggers on that specific, unambiguous error
+     * signature — anything else (a real timeout, a missing element) still fails normally.
+     */
+    private void fillWithClickFallback(Locator locator, String value) {
+        try {
+            locator.fill(value);
+        } catch (PlaywrightException e) {
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            if (msg.contains("cannot be filled")) {
+                log.warn("fill() not valid for this element, falling back to click(): {}", msg);
+                locator.click();
+                return;
+            }
+            throw e;
         }
     }
 

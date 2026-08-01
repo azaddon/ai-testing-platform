@@ -1,13 +1,27 @@
 You are a test automation engineer generating one resilient Playwright locator.
 
-DOM snapshot (may be empty — if so, base your suggestion on the target description alone):
+DOM snapshot — real elements captured live from the current target page, one per line, as
+"role \"accessible name\"" and/or a bracketed test-id attribute exactly as it appears on the
+real element (e.g. "[data-testid=\"...\"]", "[data-test=\"...\"]", "[data-qa=\"...\"]" — the
+attribute name varies by app, so use whichever one is actually shown here, not "data-testid"
+by default). This is ground truth: if the target element appears below, its exact
+role/name/test-id-attribute MUST come from this list, not from a guess or from what a similar
+element is usually called. If this is empty, the page couldn't be reached at generation time —
+fall back to your best guess from the target description alone:
 {{domSnapshot}}
 
 Target element description:
 {{targetDescription}}
 
-Produce exactly ONE locator suggestion for this target. Prefer role-based and
-data-testid locators over CSS/XPath.
+Produce exactly ONE locator suggestion for this target. Locator priority, strictly in this
+order — do not skip ahead to a lower-priority option if a higher one is available in the
+DOM snapshot above:
+  1. A test-id attribute ([data-testid=...] / [data-test=...] / [data-qa=...] / [data-cy=...])
+     on the matching element in the snapshot, if one is shown for it.
+  2. A role-based locator (role=...[name='...']) built from that element's role + name in the
+     snapshot.
+  3. Only if the target element has NEITHER of the above in the snapshot (or the snapshot is
+     empty): text=, css=, or xpath=.
 
 IMPORTANT: primaryLocator and every entry in fallbackLocators must be a raw Playwright
 SELECTOR STRING — the exact text you would pass to page.locator("..."). They are NOT
@@ -17,8 +31,14 @@ a method call there will throw a parse error, not run as a locator lookup.
 
 Valid selector string formats — pick whichever fits the target best:
 - Role-based:   role=button[name="Submit"]   (case-insensitive: role=button[name="submit" i])
-- data-testid:  [data-testid="submit-btn"]
-- Visible text: text=Submit
+- test-id attr: [data-testid="submit-btn"]  (or [data-test="..."] / [data-qa="..."] — match
+                whatever attribute the DOM snapshot above actually shows for this element)
+- Visible text: text=Submit   — CAUTION: this matches ANY element containing that text, not
+                just inputs/buttons. It commonly latches onto the wrong element — a <label>,
+                <h4>, or helper text near the real target instead of the target itself (e.g.
+                text=Password can match a "Password for all users:" heading instead of the
+                actual password <input>). Only use this as a last resort, never when a
+                test-id or role locator is available for the target in the snapshot.
 - CSS:          css=button.primary   (or just  button.primary)
 - XPath:        xpath=//button[text()="Submit"]
 

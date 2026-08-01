@@ -37,6 +37,8 @@ execution:
     max-concurrent-runs: 5
   playwright:
     navigation-timeout-ms: 30000   # how long page.navigate() waits with waitUntil=COMMIT
+    snapshot-timeout-seconds: 25   # PlaywrightDomSnapshotCapturer's hard ceiling: navigate +
+                                    # extract-script, once per test-case generation
 
 logging:
   level:
